@@ -36,8 +36,8 @@ Deploying deep neural networks (DNNs) on edge platforms requires aggressive comp
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/mix-and-match-pruning.git
-cd mix-and-match-pruning
+git clone https://github.com/Danialmonachan11/Mix-and-Match-Pruning.git
+cd Mix-and-Match-Pruning
 
 # Install dependencies
 pip install -r requirements.txt
@@ -234,8 +234,8 @@ If you use this code in your research, please cite:
 ```bibtex
 @article{mix-and-match-pruning2025,
   title={Mix-and-Match Pruning: Globally Guided Layer-Wise Sparsification of DNNs},
-  author={[Author Names]},
-  journal={[Conference/Journal]},
+  author={Monachan, Danial and Taheri, Mahdi and Nazari, Samira and Herglotz, Christian},
+  journal={arXiv preprint},
   year={2025}
 }
 ```

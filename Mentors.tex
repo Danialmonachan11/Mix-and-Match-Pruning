@@ -1,4 +1,3 @@
-
 \documentclass[11pt, conference]{IEEEtran}
 \raggedbottom
 
@@ -26,16 +25,17 @@
 \usepackage{placeins}
 \usepackage{float}
 
+% Title
 \title{Mix-and-Match Pruning: Globally Guided Layer-Wise Sparsification of DNNs}
 
-\author{
-\IEEEauthorblockN{Danial Monachan$^{1}$,
-Mahdi Taheri$^{1,2}$,
-Samira Nazari$^{1}$,
-Christian Herglotz$^{1}$}\\
-\IEEEauthorblockA{$^{1}$Brandenburg University of Technology, Cottbus, Germany}
-\IEEEauthorblockA{$^{2}$Tallinn University of Technology, Tallinn, Estonia}
-}
+
+%\author{
+%\IEEEauthorblockN{Danial Monachan$^{1}$,
+%Mahdi Taheri$^{1,2}$,
+%Christian Herglotz$^{1}$}\\
+%\IEEEauthorblockA{$^{1}$Brandenburg University of Technology, Cottbus, Germany}
+%\IEEEauthorblockA{$^{2}$Tallinn University of Technology, Tallinn, Estonia}
+%}
 
 \begin{document}
 
@@ -51,13 +51,43 @@ Neural network pruning, post-training quantization, edge deployment, model compr
 
 \section{Introduction}
 
-Neural networks achieve state-of-the-art performance across diverse tasks but face critical deployment challenges on edge devices with strict memory ($<$10 MB), computational (GFLOPs), and power constraints \cite{chavan2024edgeai, promwad2024compression}. Modern CNNs exceed 100 MB and transformers reach several hundred megabytes, rendering direct deployment infeasible. While compression techniques including quantization \cite{jacob2018quantization}, knowledge distillation \cite{hinton2015distilling}, and neural architecture search \cite{zoph2017neural} exist, neural network pruning has proven particularly effective by exploiting redundancy in overparameterized networks to achieve substantial parameter reductions while maintaining acceptable accuracy \cite{liu2024memory, zhang2024recap}.
+% neural networks achieve state-of-the-art performance across diverse tasks but face critical deployment challenges on edge devices with strict memory (<10 MB), computational (GFLOPs), and power constraints. Modern CNNs exceed 100 MB and transformers reach several hundred megabytes, rendering direct deployment infeasible. While compression techniques including quantization \cite{jacob2018quantization}, knowledge distillation \cite{hinton2015distilling}, and neural architecture search \cite{zoph2017neural} exist, neural network pruning has proven particularly effective by exploiting redundancy in overparameterized networks to achieve substantial parameter reductions while maintaining acceptable accuracy.
 
-Methods have evolved from magnitude-based approaches (MAG) \cite{han2015learning} that remove smallest-magnitude weights, to gradient-based methods like SNIP \cite{lee2018snip} using gradient-weight products, and GraSP \cite{wang2020picking} incorporating Hessian information to preserve gradient flow. These single-shot methods achieve competitive results with minimal computational overhead.
+% methods have evolved from magnitude-based approaches (MAG) \cite{han2015learning} that remove smallest-magnitude weights, to gradient-based methods like SNIP \cite{lee2018snip} using gradient-weight products, and GraSP \cite{wang2020picking} incorporating Hessian information to preserve gradient flow. These single-shot methods achieve competitive results with minimal computational overhead.
 
-Existing pruning methods produce single-point solutions for specific target sparsities, requiring complete re-execution for different deployment scenarios with varying accuracy-compression requirements. Furthermore, different architectural components (CNNs, residual networks, transformers) respond differently to pruning: skip connections require conservative pruning to preserve gradient flow \cite{li2017pruning}, while attention mechanisms exhibit global dependencies that affect compression limits \cite{rao2021dynamicvit}. Current single-point methods cannot systematically explore this design space, and empirical evidence for vision transformers under multi-strategy frameworks remains limited. Recent works have begun to explore generating multiple pruned configurations \cite{lee2024mpruner, desai2024llamaflex}, yet a unified framework for hybrid architectures is still needed.
+%Existing pruning methods produce single-point solutions for specific target sparsities, requiring complete re-execution for different deployment scenarios with varying accuracy-compression requirements. Furthermore, different architectural components (CNNs, residual networks, transformers) respond differently to pruning: skip connections require conservative pruning to preserve gradient flow, while attention mechanisms exhibit global dependencies that affect compression limits. Current single-point methods cannot systematically explore this design space, and empirical evidence for vision transformers under multi-strategy frameworks remains limited.
 
-We propose a multi-strategy pruning framework that systematically explores families of solutions by observing baseline pruning behavior to establish architecture-aware sparsity ranges, then generating diverse strategies spanning the accuracy-compression tradeoff space. Combined with post-training quantization, this provides deployment flexibility through multiple operating points without re-executing pruning procedures, achieving multiplicative compression gains suitable for edge deployment \cite{wu2025lpvit}.
+%We propose a multi-strategy pruning framework that systematically explores families of solutions by observing baseline pruning behavior to establish architecture-aware sparsity ranges, then generating diverse strategies spanning the accuracy-compression tradeoff space. Combined with post-training quantization, this provides deployment flexibility through multiple operating points without re-executing pruning procedures, achieving multiplicative compression gains suitable for edge deployment.
+
+%\section{Related Work}
+
+% network pruning has evolved from magnitude-based approaches \cite{han2015learning} to gradient-based methods like SNIP \cite{lee2018snip} and GraSP \cite{wang2020picking} that incorporate training dynamics. The Lottery Ticket Hypothesis \cite{frankle2019lottery} showed sparse subnetworks exist within dense networks. Vision transformers \cite{dosovitskiy2021vit} face deployment challenges despite strong performance; compression efforts include knowledge distillation \cite{sanh2019distilbert} and attention pruning \cite{michel2019heads}. Architectures like Swin \cite{liu2021swin} and LeViT \cite{graham2021levit} improve efficiency through hierarchical and hybrid designs. Post-training quantization \cite{jacob2018quantization} reduces precision to INT8 without retraining. While pruning and quantization achieve multiplicative compression gains, systematic frameworks handling both CNNs and transformers in post-training scenarios remain limited.
+
+%\subsection{Contributions}
+
+%We contribute: (1) a general framework that establishes architecture-aware sparsity ranges from K baseline methods (demonstrating K=3: MAG, SNIP, GraSP) and generates diverse strategies through systematic range exploration, extensible to alternative baseline method combinations; (2) multi-point pruning solutions (10 operating points per architecture) enabling deployment flexibility without re-execution of pruning procedures, contrasting with traditional single-point optimization approaches; (3) comprehensive evaluation revealing when multi-strategy exploration succeeds (VGG-11, ResNet-18, LeViT-384) versus when single-method baselines are superior (Swin-Tiny), providing empirical guidance for method selection; (4) architecture-specific insights identifying that hierarchical transformers with structural dependencies require global coordination, while CNNs and hybrid transformers benefit from layer-wise exploration.
+
+% pruning methods typically produce single-point solutions tuned to a specific sparsity target, requiring full re-execution when deployment scenarios demand different accuracy--compression trade-offs. In addition, architectural components such as convolutional layers, residual connections, and attention mechanisms respond differently to parameter removal: skip connections necessitate conservative pruning to maintain gradient flow, while self-attention relies on globally distributed dependencies that constrain achievable sparsity. As a result, current single-point approaches are unable to systematically explore this heterogeneous design space, and empirical evidence for multi-strategy pruning in vision transformers remains limited. A key unresolved challenge is the selection of an appropriate pruning criterion for a given model, based on its structure and parameter characteristics. This gap motivates a mix-and-match pruning paradigm that determines suitable strategies for each architecture through coordinated multi-criterion exploration.
+% this gap, a multi-strategy pruning framework is proposed that systematically explores families of solutions by observing baseline pruning behavior to establish architecture-aware sparsity ranges, then generating diverse strategies spanning the accuracy--sparsity trade-off space. When combined with post-training quantization, the framework provides deployment flexibility through multiple operating points without re-executing pruning procedures, producing multiplicative compression gains suitable for edge-oriented scenarios.
+% contributions of this paper are as follows.}
+%}%  Mix-and-Match Pruning is introduced that establishes architecture-aware sparsity ranges from multiple baseline criteria (demonstrated with three representative methods) and generates diverse layer-adaptive strategies through systematic exploration, while remaining extensible to othe% Multi-point pruning outputs are produced, offering multiple operating points per architecture and enabling deployment flexibility without re-executing the pruning procedure, in contrast to traditional single-point approa% A comprehensive evaluation is conducted across CNNs and vision transformers, revealing when multi-strategy exploration is advantageous and when individual baseline methods perform comparably.
+%{itemize}
+% of this paper is organized as follows. Section~\ref{sec:method} presents the proposed methodology. Section~\ref{sec:results} reports the experimental results and analysis and Section~\ref{sec:conclusion} concludes the paper.
+
+
+Deep neural networks (DNNs) achieve state-of-the-art performance across vision tasks but their deployment on edge devices is hindered by strict memory ($<10 MB$), compute, and power constraints \cite{}. Modern CNNs often exceed 100 MB and Vision Transformers (ViTs) reach several hundred megabytes, making direct deployment impractical \cite{}. While compression techniques such as quantization~\cite{jacob2018quantization}, knowledge distillation~\cite{hinton2015distilling}, and neural architecture search~\cite{zoph2017neural} offer partial solutions, pruning remains particularly effective due to its ability to remove redundant parameters while preserving accuracy.
+
+Early pruning research focused on global magnitude-based criteria (MAG)~\cite{han2015learning}. Later works such as SNIP~\cite{lee2018snip} and GraSP~\cite{wang2020picking} incorporated gradient and Hessian information to estimate weight importance in a single-shot fashion. The Lottery Ticket Hypothesis~\cite{frankle2019lottery} further highlighted the existence of performant sparse subnetworks within dense models. In parallel, ViT compression has explored attention pruning~\cite{michel2019heads}, hybrid efficient architectures~\cite{liu2021swin,graham2021levit}, and post-training quantization~\cite{jacob2018quantization}. Despite these efforts, unified post-training pruning frameworks for both CNNs and transformers are still limited.
+
+A core limitation of existing pruning methods is that they produce only a single sparsity point tuned to a predetermined compression target. When deployment requirements change, the entire pruning procedure must be re-executed. Furthermore, architectural components behave differently under pruning: convolutional layers and residual blocks require conservative pruning to preserve gradient flow, while self-attention layers rely on globally distributed dependencies that restrict achievable sparsity. As a result, no single pruning criterion consistently performs well across architectures or sparsity levels.
+
+These challenges are amplified in layer-wise pruning, where determining the appropriate sparsity for each layer is crucial. Layer-wise strategies offer several advantages—improved accuracy retention, better alignment with hardware structure, and finer control over parameter removal—but they also expose substantial variability across architectures. Selecting a suitable pruning criterion therefore becomes a non-trivial task, especially in post-training scenarios.
+
+This gap motivates a multi-strategy, layer-wise pruning paradigm. Instead of committing to a single criterion, we seek to systematically explore multiple global pruning metrics, derive architecture-aware sparsity ranges, and generate diverse layer-adaptive strategies that collectively cover a broad accuracy--sparsity trade-off space.
+
+% address this need, we propose Mix-and-Match Pruning}, a mult% baseline pruning behavior from multiple global criter% architecture-aware layer-wise sparsity ranges, and  % a family of pruned models offering multiple deployment-ready operating points without re-running pruning.
+% with post-training quantization, the framework enables flexible and multiplicative compression suitable for edge devices.
+
 
 The main contributions of this paper are:
 \begin{itemize}
@@ -67,6 +97,8 @@ The main contributions of this paper are:
 \end{itemize}
 
 The remainder of this paper is organized as follows: Section~\ref{sec:method} presents the methodology, Section~\ref{sec:results} provides experimental results and analysis, and Section~\ref{sec:conclusion} concludes the paper.
+
+
 
 \section{Mix-and-Match Pruning Methodology}
 \label{sec:method}
@@ -284,7 +316,7 @@ Fine-tuning is performed to recover accuracy lost due to pruning. During fine-tu
 
 The evaluation covers four representative architectures selected to span classical convolutional, residual, hybrid, and hierarchical transformer designs. These models—VGG-11 \cite{simonyan2015vgg}, ResNet-18 \cite{he2016resnet}, LeViT-384 \cite{graham2021levit}, and Swin-Tiny \cite{liu2021swin}—are paired with datasets commonly used for vision benchmarks. VGG-11 and LeViT-384 are trained on CIFAR-10 \cite{krizhevsky2009cifar}, ResNet-18 on GTSRB \cite{stallkamp2012gtsrb}, and Swin-Tiny on CIFAR-100 \cite{krizhevsky2009cifar}. The baseline characteristics of all models, including parameter counts and top-1 accuracies, are summarized in Table~\ref{tab:baselines}. These baselines provide the reference point against which the effects of the Mix-and-Match Pruning are assessed.
 
-\begin{table}[!ht]
+\begin{table}[t]
 \centering
 \caption{Baseline model characteristics. Parameter counts refer to dense, unpruned models. Accuracies are top-1 validation results.}
 \label{tab:baselines}
@@ -444,7 +476,7 @@ Pruning strategies carefully preserve attention and MLP blocks while exploring a
 
 \begin{table}[!htbp]
 \centering
-\caption{Mix-and-Match Pruning Results for Swin-Tiny. All results use the magnitude sensitivity metric.}
+\caption{Mix-and-Match Pruning Results for Swin-Tiny (Magnitude-Only Sensitivity)}
 \label{tab:swin_results}
 \scriptsize
 \setlength{\tabcolsep}{4pt}
@@ -885,302 +917,154 @@ The framework produces low-variance performance across multiple pruning strategi
 % \textbf{Algorithm-Agnostic Design.} Our framework is not limited to MAG, SNIP, and GraSP baseline methods. The range establishment phase (Algorithm 1, lines 5-11) can incorporate any pruning method capable of producing layer-wise sparsity distributions at different global targets. For instance, adding SynFlow, GrOWL, FORCE, or custom domain-specific methods would simply expand the baseline set $\mathcal{B}$ in Equations 1-2, potentially discovering improved layer-wise ranges. This algorithm-agnostic design ensures the framework remains relevant as new pruning techniques emerge without requiring architectural modifications to the core methodology. Users can select baselines matching their deployment constraints, whether prioritizing gradient-based methods for training-aware pruning or magnitude-based approaches for post-training scenarios. The framework serves as a meta-pruning strategy that learns from collective baseline behavior rather than committing to any single approach.
 
 % \subsection{Limitations and Future Work}
-% Method & Spar(\%) & FLOPs & FP32(\%) & INT8(\%) & Drop(\%) \\
-% \midrule
-% \textbf{Multi-Strategy (Best)} & 89.60 & 172.29M & 90.41 & \textbf{90.42} & \textbf{1.97} \\
-% MAG+PTQ & 89.94 & 172.29M & 89.50 & 89.53 & 2.86 \\
-% SNIP+PTQ & 89.94 & 172.29M & 89.43 & 89.46 & 2.93 \\
-% GraSP+PTQ & 89.94 & 172.29M & 89.19 & 89.30 & 3.09 \\
-% Random+PTQ & 89.94 & 172.29M & 10.01 & 10.01 & 82.39 \\
-% \bottomrule
-% \end{tabular}
-% \end{table}
-
-% Multi-strategy consistently outperforms all baseline methods: +0.89\% vs MAG, +0.96\% vs SNIP, +1.12\% vs GraSP at comparable $\sim$90\% sparsity. This demonstrates the effectiveness of architecture-aware range exploration for highly redundant CNNs.
-
-% \FloatBarrier
-
-% \subsection{Residual Network Results}
-
-
-
-% \begin{table}[!htbp]
-% \centering
-% \caption{ResNet-18: Multi-Strategy vs Baselines with PTQ}
-% \label{tab:resnet_baselines}
-% \scriptsize
-% % \setlength{\tabcolsep}{3.5pt}
-% \begin{tabular}{lccccc}
-% \toprule
-% Method & Spar(\%) & FLOPs & FP32(\%) & INT8(\%) & Drop(\%) \\
-% \midrule
-% \textbf{Multi-Strategy (Matched)} & 82.79 & 1.82G & 97.06 & 97.08 & 2.24 \\
-% MAG+PTQ & 81.65 & 1.82G & 97.27 & 97.28 & 2.04 \\
-% SNIP+PTQ & 81.65 & 1.82G & 97.45 & 97.47 & 1.84 \\
-% GraSP+PTQ & 81.65 & 1.82G & 97.83 & \textbf{97.81} & \textbf{1.50} \\
-% Random+PTQ & 81.65 & 1.82G & 95.48 & 95.48 & 3.84 \\
-% \bottomrule
-% \end{tabular}
-% \end{table}
-
-% At matched $\sim$82\% sparsity, multi-strategy achieves 97.08\%, competitive with all baselines (within 0.7\% of best performing GraSP). The framework successfully handles skip connections through sensitivity-based range establishment, providing multiple operating points across 73-90\% sparsity range.
-
-% \FloatBarrier
-
-% \subsection{Hybrid Transformer Results}
-
-
-
-% \begin{table}[!htbp]
-% \centering
-% \caption{LeViT-384: Multi-Strategy vs Baselines with PTQ}
-% \label{tab:levit_baselines}
-% \scriptsize
-% \setlength{\tabcolsep}{3.5pt}
-% \begin{tabular}{lccccc}
-% \toprule
-% Method & Spar(\%) & FLOPs & FP32(\%) & INT8(\%) & Drop(\%) \\
-% \midrule
-% \textbf{Multi-Strategy (Matched)} & 54.08 & 2.25G & 97.41 & 97.16 & 0.59 \\
-% MAG+PTQ & 53.76 & 2.25G & 97.37 & 96.50 & 1.25 \\
-% SNIP+PTQ & 53.76 & 2.25G & 97.54 & 96.95 & 0.80 \\
-% GraSP+PTQ & 53.76 & 2.25G & 97.43 & \textbf{97.16} & \textbf{0.59} \\
-% Random+PTQ & 53.76 & 2.25G & 90.11 & 89.13 & 8.62 \\
-% \bottomrule
-% \end{tabular}
-% \end{table}
-
-% At matched $\sim$54\% sparsity, multi-strategy achieves 97.16\%, tying with GraSP and outperforming MAG (+0.66\%) and SNIP (+0.21%). Conservative strategies achieve even better results of 97.31\% at 44\% sparsity, demonstrating the value of exploring multiple operating points for attention-based architectures.
-
-% \FloatBarrier
-
-% \subsection{Hierarchical Transformer Results}
-
-
-
-% \begin{table}[!htbp]
-% \centering
-% \caption{Swin-Tiny: Multi-Strategy vs Baselines with PTQ (CIFAR-100)}
-% \label{tab:swin_baselines}
-% \scriptsize
-% \setlength{\tabcolsep}{3.5pt}
-% \begin{tabular}{lccccc}
-% \toprule
-% Method & Spar(\%) & FLOPs & FP32(\%) & INT8(\%) & Drop(\%) \\
-% \midrule
-% \textbf{Multi-Strategy (Best)} & 35.96 & 4.37G & 83.39 & \textbf{83.27} & \textbf{5.87} \\
-% MAG+PTQ & 61.74 & 4.37G & 86.42 & 86.12 & 3.02 \\
-% SNIP+PTQ & 61.74 & 4.37G & 84.96 & 84.34 & 4.80 \\
-% GraSP+PTQ & 61.74 & 4.37G & 85.14 & 84.68 & 4.46 \\
-% Random+PTQ & 38.21 & 4.37G & 82.00 & 81.89 & 7.25 \\
-% \bottomrule
-% \end{tabular}
-% \end{table}
-
-% Multi-strategy achieves 83.27\% at safe 36\% sparsity, outperforming Random by +1.38\%. Swin-Tiny's hierarchical window-based attention cannot tolerate aggressive pruning beyond 40\% sparsity using general-purpose layer-wise strategies. While specialized single-method baselines achieve higher sparsity (61.74\%), multi-strategy identifies the natural compression boundary where accuracy remains usable for deployment.
-
-% \FloatBarrier
-
-% \subsection{Quantization Resilience}
-
-% All architectures show excellent PTQ resilience with minimal FP32-to-INT8 degradation: VGG-11 (+0.01\%), ResNet-18 (<0.03\%), LeViT-384 (0.25\%), Swin-Tiny (0.11-0.12\%). This indicates pruned weight distributions are well-conditioned for reduced precision.
-
-% \section{Discussion}
-
-% \subsection{Results Analysis}
-
-% Figure~\ref{fig:all_architectures} compares methods across architectures at matched sparsity: VGG-11 ($\sim$90\%) outperforms baselines (+0.89-1.12\%); LeViT-384 ($\sim$54\%) ties GraSP, beats MAG/SNIP; ResNet-18 ($\sim$82\%) competitive within 0.7\%; Swin-Tiny ($\sim$36\%) identifies safe limits while specialized baselines reach 61\%.
-
-% \begin{figure}[htbp]
-% \centering
-% \begin{tikzpicture}
-% \begin{axis}[
-%     ybar,
-%     width=0.95\columnwidth,
-%     height=0.6\columnwidth,
-%     ylabel={INT8 Accuracy (\%)},
-%     ylabel style={font=\small},
-%     xlabel={Architecture},
-%     xlabel style={font=\small},
-%     symbolic x coords={VGG-11, ResNet-18, LeViT-384, Swin-Tiny},
-%     xtick=data,
-%     x tick label style={font=\scriptsize, anchor=north},
-%     ymin=80, ymax=100,
-%     bar width=7pt,
-%     legend style={at={(0.85,0.95)}, anchor=north west, legend columns=1, font=\scriptsize, draw=none},
-%     legend cell align={left},
-%     ymajorgrids=true,
-%     grid style={dotted, gray!25},
-%     enlarge x limits=0.15,
-%     nodes near coords,
-%     nodes near coords style={font=\tiny, rotate=90, anchor=west, inner sep=2pt},
-%     every node near coord/.append style={yshift=1pt},
-%     axis lines*=left,
-%     axis line style={-}
-% ]
-% \addplot[ybar, fill=blue!45!cyan!60, draw=none, area legend] coordinates {
-%     (VGG-11, 90.42) (ResNet-18, 97.52) (LeViT-384, 97.31) (Swin-Tiny, 83.27)
-% };
-% \addplot[ybar, fill=red!60!orange!70, draw=none, area legend] coordinates {
-%     (VGG-11, 89.53) (ResNet-18, 97.28) (LeViT-384, 96.50) (Swin-Tiny, 86.12)
-% };
-% \addplot[ybar, fill=green!40!black!60, draw=none, area legend] coordinates {
-%     (VGG-11, 89.46) (ResNet-18, 97.47) (LeViT-384, 96.95) (Swin-Tiny, 84.34)
-% };
-% \addplot[ybar, fill=red!40!blue!60, draw=none, area legend] coordinates {
-%     (VGG-11, 89.30) (ResNet-18, 97.81) (LeViT-384, 97.16) (Swin-Tiny, 84.68)
-% };
-% \legend{Multi-Strategy, MAG, SNIP, GraSP}
-% \end{axis}
-% \end{tikzpicture}
-% \caption{Cross-architecture INT8 accuracy comparison across pruning methods.}
-% \label{fig:all_architectures}
-% \end{figure}
-
-% Sparsity limits vary by architecture: VGG-11 (90\%) due to FC layer redundancy and no skip connections; ResNet-18 (73-83\%) where skip connections require protection while late blocks tolerate 75-95\%; LeViT-384 (50-60\%) where attention creates global dependencies and QKV coupling limits pruning; Swin-Tiny (35-60\%) where hierarchical window attention and 224$\times$224 resolution reduce redundancy. These represent \textit{optimal compression points} given architectural constraints. Figure~\ref{fig:accuracy_sparsity} shows accuracy-sparsity tradeoffs.
-
-% \begin{figure}[htbp]
-% \centering
-% \begin{tikzpicture}
-% \begin{axis}[
-%     width=0.7\columnwidth,
-%     height=0.45\columnwidth,
-%     xlabel={Sparsity (\%)},
-%     xlabel style={font=\small},
-%     ylabel={INT8 Accuracy (\%)},
-%     ylabel style={font=\small},
-%     xmin=30, xmax=95,
-%     ymin=80, ymax=100,
-%     legend style={at={(1.02,0.5)}, anchor=west, font=\scriptsize, draw=none, fill=white, fill opacity=0.9, text opacity=1},
-%     ymajorgrids=true,
-%     xmajorgrids=true,
-%     grid style={dotted, gray!30},
-%     axis lines*=left,
-%     axis line style={-}
-% ]
-% \addplot[only marks, mark=square*, mark size=4pt, color=blue!45!cyan!60, fill=blue!45!cyan!60] coordinates {(90, 90.42)};
-% \addplot[only marks, mark=triangle*, mark size=4pt, color=red!60!orange!70, fill=red!60!orange!70] coordinates {(73, 97.52)};
-% \addplot[only marks, mark=diamond*, mark size=4pt, color=green!40!black!60, fill=green!40!black!60] coordinates {(44, 97.31)};
-% \addplot[only marks, mark=pentagon*, mark size=4pt, color=red!40!blue!60, fill=red!40!blue!60] coordinates {(36, 83.27)};
-% \legend{VGG-11, ResNet-18, LeViT-384, Swin-Tiny}
-% \end{axis}
-% \end{tikzpicture}
-% \caption{Accuracy-sparsity tradeoff showing architecture-specific compression limits for multi-strategy framework.}
-% \label{fig:accuracy_sparsity}
-% \end{figure}
-
-% \subsection{Deployment Analysis}
-
-% Framework achieves low variance across architectures: VGG-11 (0.14\%, +0.89-1.12\% over baselines at $\sim$90\% sparsity), ResNet-18 (0.25\%, competitive within 0.7\% at $\sim$82\%), LeViT-384 (0.16\%, ties GraSP at $\sim$54\%), Swin-Tiny (83.27\% at safe 36\% sparsity, +1.38\% vs Random). Sensitivity-based range establishment successfully handles skip connections in ResNets and attention mechanisms in transformers.
-
-% Compression ratios demonstrate deployment viability: VGG-11 (36$\times$, 107 MB→3 MB), ResNet-18 (11.8$\times$, 45 MB→3.8 MB), LeViT-384 (7.7$\times$, 143 MB→18.5 MB), Swin-Tiny (6.4$\times$ at 38\% sparsity). Multi-strategy provides multiple operating points enabling flexible deployment across diverse edge device constraints.
-
-% \subsection{Framework Generalizability}
-
-% \textbf{Algorithm-Agnostic Design.} Our framework is not limited to MAG, SNIP, and GraSP baseline methods. The range establishment phase (Algorithm 1, lines 5-11) can incorporate any pruning method capable of producing layer-wise sparsity distributions at different global targets. For instance, adding SynFlow, GrOWL, FORCE, or custom domain-specific methods would simply expand the baseline set $\mathcal{B}$ in Equations 1-2, potentially discovering improved layer-wise ranges. This algorithm-agnostic design ensures the framework remains relevant as new pruning techniques emerge without requiring architectural modifications to the core methodology. Users can select baselines matching their deployment constraints, whether prioritizing gradient-based methods for training-aware pruning or magnitude-based approaches for post-training scenarios. The framework serves as a meta-pruning strategy that learns from collective baseline behavior rather than committing to any single approach.
-
-% \subsection{Limitations and Future Work}
 
 % \textbf{Architecture-Specific Limitations.} While the multi-strategy framework achieves competitive or superior results for VGG-11, ResNet-18, and LeViT-384, Swin-Tiny reveals a fundamental limitation: layer-wise range constraints derived from global pruning methods may not capture optimal sparsity distributions for architectures with strong structural dependencies. Baseline methods (MAG, SNIP, GraSP) achieve 61\% sparsity on Swin-Tiny with 3-5\% accuracy drops using global threshold selection. In contrast, multi-strategy identifies a safe conservative region (35-36\% sparsity, 6\% drop) but cannot reach higher sparsity levels without catastrophic accuracy collapse (40\% sparsity, 18\% drop). This failure occurs because: (1) layer-wise constraints may over-protect certain layers while under-utilizing redundancy in others, (2) hierarchical window-based attention creates inter-layer dependencies requiring coordinated global pruning decisions, and (3) the range establishment phase captures how much each layer is pruned but not the structural patterns that enable high sparsity. For deployment scenarios requiring maximum compression, single-method baselines outperform multi-strategy for Swin-Tiny.
+
+% \textbf{Additional Limitations.} Dataset heterogeneity limits cross-architecture comparisons and moderate-scale evaluation requires ImageNet validation for production scenarios. Range selection lacks systematic ablation studies. Current unstructured focus should incorporate structured pruning for hardware efficiency.
+
+% \textbf{Future Work.} Future work should: (1) validate on large-scale datasets, (2) establish consistent evaluation protocols across architectures, (3) incorporate adaptive strategy selection that detects architectural characteristics and switches between layer-wise and global pruning approaches, (4) explore structured pruning integration targeting entire attention heads or windows for hierarchical transformers, and (5) extend to NLP domains.
+
 \section{Conclusion}
 \label{sec:conclusion}
+% This paper presents \textit{Mix-and-Match Pruning}, a flexible and architecture-aware pruning framework that combines layer-wise sensitivity exploration with adaptive sparsity allocation. By leveraging multiple, user-selectable sensitivity metrics and enabling their combination or modification, the framework generates high-quality pruned models that maintain competitive INT8 accuracy even at aggressive sparsity levels. Extensive evaluations across diverse architectures, including CNNs (VGG-11, ResNet-18) and hybrid or hierarchical transformers (LeViT-384, Swin-Tiny), demonstrate that Multi-Strategy pruning consistently outperforms representative baseline methods such as MAG, SNIP, GraSP, and Random. The layer-wise pruning mechanism ensures that critical features and connections are preserved, providing robust performance and fine-grained control over model compression. Additionally, the combination of structured and layer-wise pruning has the potential to make the resulting models more hardware-friendly by creating regular sparsity patterns that improve memory access, computational parallelism, and efficiency on sparse-aware accelerators.
+
+% Future work should aim to further expand the applicability and hardware efficiency of the framework. Specifically, it should: (1) validate the approach on large-scale datasets to assess scalability, (2) establish consistent evaluation protocols across diverse architectures for fair benchmarking, (3) incorporate adaptive strategy selection that automatically detects architectural characteristics and dynamically switches between layer-wise and global pruning approaches, (4) explore structured pruning integration targeting entire attention heads or windows in hierarchical transformers to maximize hardware efficiency, and (5) extend the methodology to natural language processing domains to evaluate generalization beyond vision tasks. These directions will enhance the versatility, performance, and deployment efficiency of Multi-Strategy pruning for a wide range of deep learning applications.
+
+\section{Conclusion}
 This paper introduced \textit{Mix-and-Match Pruning}, an architecture-aware framework that improves the effectiveness of existing pruning algorithms through layer-wise sensitivity exploration and adaptive sparsity allocation. By systematically combining user-selectable criteria, the method produces consistently lower accuracy drop across CNNs, hybrid models, and Vision Transformers, outperforming representative baselines without requiring new pruning rules or expensive retraining. The results highlight that intelligently guiding existing techniques—not replacing them—offers a practical path to high-sparsity, hardware-efficient models suitable for edge deployment. Future work will extend the framework to larger datasets, structured pruning, and broader model families to further enhance its scalability and generality.
 
-\begin{thebibliography}{00}
 
-\bibitem{chavan2024edgeai}
-S. Chavan et al., ``Edge AI: A Taxonomy, Systematic Review and Future Directions,'' \textit{arXiv preprint arXiv:2501.xxxxx}, 2025.
+\bibliographystyle{IEEEtran}
+\bibliography{reference}
 
-\bibitem{wu2025lpvit}
-X. Wu, Y. Zhang, and Q. Li, ``LPViT: Low-Power Semi-structured Pruning for Vision Transformers,'' in \textit{European Conference on Computer Vision (ECCV)}, 2025.
 
-\bibitem{liu2024memory}
-Z. Liu, H. Chen, and M. Wang, ``Memory-Efficient Vision Transformers for Edge Deployment,'' \textit{arXiv preprint arXiv:2402.xxxxx}, 2024.
+% \begin{thebibliography}{00}
 
-\bibitem{zhang2024recap}
-Y. Zhang, S. Liu et al., ``RECAP: Resource-Efficient Finetuning Pruning for Transformers,'' in \textit{International Conference on Machine Learning (ICML)}, 2024.
+% \bibitem{han2015learning} 
+% S. Han, J. Pool, J. Tran, and W. Dally, 
+% ``Learning both weights and connections for efficient neural network,'' 
+% \textit{Advances in Neural Information Processing Systems}, vol. 28, pp. 1135--1143, 2015.
 
-\bibitem{promwad2024compression}
-Promwad Team, ``Model Compression Techniques for Edge AI Deployment in 2024-2025,'' \textit{Promwad Innovation Review}, 2024.
+% \bibitem{lee2018snip} 
+% N. Lee, T. Ajanthan, and P. H. Torr, 
+% ``SNIP: Single-shot network pruning based on connection sensitivity,'' 
+% \textit{International Conference on Learning Representations}, 2019.
 
-\bibitem{desai2024llamaflex}
-V. Desai et al., ``LLAMAFLEX: Flexible Pruning for Large Language Models via Nested Weight-Sharing,'' in \textit{International Conference on Learning Representations (ICLR)}, 2024.
+% \bibitem{wang2020picking} 
+% C. Wang, G. Zhang, and R. Grosse, 
+% ``Picking winning tickets before training by preserving gradient flow,'' 
+% \textit{International Conference on Learning Representations}, 2020.
 
-\bibitem{lee2024mpruner}
-J. Lee and S. Kim, ``MPruner: Optimizing Neural Network Pruning with Centered Kernel Alignment,'' \textit{arXiv preprint arXiv:2403.xxxxx}, 2024.
+% \bibitem{hinton2015distilling}
+% G. Hinton, O. Vinyals, and J. Dean,
+% ``Distilling the knowledge in a neural network,''
+% \textit{arXiv preprint arXiv:1503.02531}, 2015.
 
-\bibitem{li2017pruning}
-H. Li, A. Kadav, I. Durdanovic, H. Samet, and H. P. Graf, ``Pruning filters for efficient ConvNets,'' in \textit{International Conference on Learning Representations (ICLR)}, 2017.
+% \bibitem{zoph2017neural}
+% B. Zoph and Q. V. Le,
+% ``Neural architecture search with reinforcement learning,''
+% \textit{International Conference on Learning Representations}, 2017.
 
-\bibitem{rao2021dynamicvit}
-Y. Rao, W. Zhao, B. Liu, J. Lu, J. Zhou, and C. Hsieh, ``DynamicViT: Efficient Vision Transformers with Dynamic Token Sparsification,'' in \textit{Advances in Neural Information Processing Systems (NeurIPS)}, 2021.
+% \bibitem{jacob2018quantization}
+% B. Jacob, S. Kligys, B. Chen, M. Zhu, M. Tang, A. Howard, H. Adam, and D. Kalenichenko,
+% ``Quantization and training of neural networks for efficient integer-arithmetic-only inference,''
+% \textit{IEEE Conference on Computer Vision and Pattern Recognition}, pp. 2704--2713, 2018.
 
-\bibitem{jacob2018quantization}
-B. Jacob et al., ``Quantization and training of neural networks for efficient integer-arithmetic-only inference,'' in \textit{CVPR}, pp. 2704--2713, 2018.
+% \bibitem{simonyan2015vgg}
+% K. Simonyan and A. Zisserman,
+% ``Very deep convolutional networks for large-scale image recognition,''
+% \textit{International Conference on Learning Representations}, 2015.
 
-\bibitem{hinton2015distilling}
-G. Hinton, O. Vinyals, and J. Dean, ``Distilling the knowledge in a neural network,'' \textit{arXiv preprint arXiv:1503.02531}, 2015.
+% \bibitem{he2016resnet}
+% K. He, X. Zhang, S. Ren, and J. Sun,
+% ``Deep residual learning for image recognition,''
+% \textit{IEEE Conference on Computer Vision and Pattern Recognition}, pp. 770--778, 2016.
 
-\bibitem{zoph2017neural}
-B. Zoph and Q. V. Le, ``Neural architecture search with reinforcement learning,'' in \textit{ICLR}, 2017.
+% \bibitem{dosovitskiy2021vit}
+% A. Dosovitskiy, L. Beyer, A. Kolesnikov, D. Weissenborn, X. Zhai, T. Unterthiner, M. Dehghani, M. Minderer, G. Heigold, S. Gelly, J. Uszkoreit, and N. Houlsby,
+% ``An image is worth 16x16 words: Transformers for image recognition at scale,''
+% \textit{International Conference on Learning Representations}, 2021.
 
-\bibitem{han2015learning}
-S. Han, J. Pool, J. Tran, and W. Dally, ``Learning both weights and connections for efficient neural network,'' in \textit{NeurIPS}, vol. 28, pp. 1135--1143, 2015.
+% \bibitem{liu2021swin}
+% Z. Liu, Y. Lin, Y. Cao, H. Hu, Y. Wei, Z. Zhang, S. Lin, and B. Guo,
+% ``Swin Transformer: Hierarchical vision transformer using shifted windows,''
+% \textit{IEEE International Conference on Computer Vision}, pp. 10012--10022, 2021.
 
-\bibitem{lee2018snip}
-N. Lee, T. Ajanthan, and P. H. Torr, ``SNIP: Single-shot network pruning based on connection sensitivity,'' in \textit{ICLR}, 2019.
+% \bibitem{graham2021levit}
+% B. Graham, A. El-Nouby, H. Touvron, P. Stock, A. Joulin, H. Jégou, and M. Douze,
+% ``LeViT: A vision transformer in ConvNet's clothing for faster inference,''
+% \textit{IEEE International Conference on Computer Vision}, pp. 12259--12269, 2021.
 
-\bibitem{wang2020picking}
-C. Wang, G. Zhang, and R. Grosse, ``Picking winning tickets before training by preserving gradient flow,'' in \textit{ICLR}, 2020.
+% \bibitem{krizhevsky2009cifar}
+% A. Krizhevsky and G. Hinton,
+% ``Learning multiple layers of features from tiny images,''
+% Technical Report, University of Toronto, 2009.
 
-\bibitem{simonyan2015vgg}
-K. Simonyan and A. Zisserman, ``Very deep convolutional networks for large-scale image recognition,'' in \textit{ICLR}, 2015.
+% \bibitem{stallkamp2012gtsrb}
+% J. Stallkamp, M. Schlipsing, J. Salmen, and C. Igel,
+% ``Man vs. computer: Benchmarking machine learning algorithms for traffic sign recognition,''
+% \textit{Neural Networks}, vol. 32, pp. 323--332, 2012.
 
-\bibitem{he2016resnet}
-K. He, X. Zhang, S. Ren, and J. Sun, ``Deep residual learning for image recognition,'' in \textit{CVPR}, pp. 770--778, 2016.
+% \bibitem{frankle2019lottery}
+% J. Frankle and M. Carbin,
+% ``The lottery ticket hypothesis: Finding sparse, trainable neural networks,''
+% \textit{International Conference on Learning Representations}, 2019.
 
-\bibitem{dosovitskiy2021vit}
-A. Dosovitskiy et al., ``An image is worth 16x16 words: Transformers for image recognition at scale,'' in \textit{ICLR}, 2021.
+% \bibitem{li2017pruning}
+% H. Li, A. Kadav, I. Durdanovic, H. Samet, and H. P. Graf,
+% ``Pruning filters for efficient ConvNets,''
+% \textit{International Conference on Learning Representations}, 2017.
 
-\bibitem{liu2021swin}
-Z. Liu et al., ``Swin Transformer: Hierarchical vision transformer using shifted windows,'' in \textit{ICCV}, pp. 10012--10022, 2021.
+% \bibitem{molchanov2017variational}
+% P. Molchanov, S. Tyree, T. Karras, T. Aila, and J. Kautz,
+% ``Pruning convolutional neural networks for resource efficient inference,''
+% \textit{International Conference on Learning Representations}, 2017.
 
-\bibitem{graham2021levit}
-B. Graham et al., ``LeViT: A vision transformer in ConvNet's clothing for faster inference,'' in \textit{ICCV}, pp. 12259--12269, 2021.
+% \bibitem{he2018amc}
+% Y. He, J. Lin, Z. Liu, H. Wang, L. J. Li, and S. Han,
+% ``AMC: AutoML for model compression and acceleration on mobile devices,''
+% \textit{European Conference on Computer Vision}, pp. 784--800, 2018.
 
-\bibitem{krizhevsky2009cifar}
-A. Krizhevsky and G. Hinton, ``Learning multiple layers of features from tiny images,'' Tech. Rep., University of Toronto, 2009.
+% \bibitem{michel2019heads}
+% P. Michel, O. Levy, and G. Neubig,
+% ``Are sixteen heads really better than one?''
+% \textit{Advances in Neural Information Processing Systems}, vol. 32, 2019.
 
-\bibitem{stallkamp2012gtsrb}
-J. Stallkamp et al., ``Man vs. computer: Benchmarking machine learning algorithms for traffic sign recognition,'' \textit{Neural Networks}, vol. 32, pp. 323--332, 2012.
+% \bibitem{voita2019analyzing}
+% E. Voita, D. Talbot, F. Moiseev, R. Sennrich, and I. Titov,
+% ``Analyzing multi-head self-attention: Specialized heads do the heavy lifting, the rest can be pruned,''
+% \textit{Annual Meeting of the Association for Computational Linguistics}, pp. 5797--5808, 2019.
 
-\bibitem{frankle2019lottery}
-J. Frankle and M. Carbin, ``The lottery ticket hypothesis: Finding sparse, trainable neural networks,'' in \textit{ICLR}, 2019.
+% \bibitem{zafrir2021prune}
+% O. Zafrir, G. Boudoukh, P. Izsak, and M. Wasserblat,
+% ``Prune once for all: Sparse pre-trained language models,''
+% \textit{arXiv preprint arXiv:2111.05754}, 2021.
 
-\bibitem{michel2019heads}
-P. Michel, O. Levy, and G. Neubig, ``Are sixteen heads really better than one?'' in \textit{NeurIPS}, vol. 32, 2019.
+% \bibitem{sanh2019distilbert}
+% V. Sanh, L. Debut, J. Chaumond, and T. Wolf,
+% ``DistilBERT, a distilled version of BERT: smaller, faster, cheaper and lighter,''
+% \textit{arXiv preprint arXiv:1910.01108}, 2019.
 
-\bibitem{voita2019analyzing}
-E. Voita et al., ``Analyzing multi-head self-attention: Specialized heads do the heavy lifting, the rest can be pruned,'' in \textit{ACL}, pp. 5797--5808, 2019.
+% \bibitem{chen2021vision}
+% Y. Chen, X. Dai, M. Liu, D. Chen, L. Yuan, and Z. Liu,
+% ``Dynamic convolution: Attention over convolution kernels,''
+% \textit{IEEE Conference on Computer Vision and Pattern Recognition}, pp. 11030--11039, 2020.
 
-\bibitem{zafrir2021prune}
-O. Zafrir et al., ``Prune once for all: Sparse pre-trained language models,'' \textit{arXiv preprint arXiv:2111.05754}, 2021.
+% \bibitem{nagel2019data}
+% M. Nagel, M. Fournarakis, R. A. Amjad, Y. Bondarenko, M. van Baalen, and T. Blankevoort,
+% ``A white paper on neural network quantization,''
+% \textit{arXiv preprint arXiv:2106.08295}, 2021.
 
-\bibitem{sanh2019distilbert}
-V. Sanh et al., ``DistilBERT, a distilled version of BERT: smaller, faster, cheaper and lighter,'' \textit{arXiv preprint arXiv:1910.01108}, 2019.
+% \bibitem{banner2019post}
+% R. Banner, Y. Nahshan, and D. Soudry,
+% ``Post training 4-bit quantization of convolutional networks for rapid-deployment,''
+% \textit{Advances in Neural Information Processing Systems}, vol. 32, 2019.
 
-\bibitem{chen2021vision}
-Y. Chen et al., ``Dynamic convolution: Attention over convolution kernels,'' in \textit{CVPR}, pp. 11030--11039, 2020.
+% \bibitem{wang2019haq}
+% K. Wang, Z. Liu, Y. Lin, J. Lin, and S. Han,
+% ``HAQ: Hardware-aware automated quantization with mixed precision,''
+% \textit{IEEE Conference on Computer Vision and Pattern Recognition}, pp. 8612--8620, 2019.
 
-\bibitem{nagel2019data}
-M. Nagel et al., ``A white paper on neural network quantization,'' \textit{arXiv preprint arXiv:2106.08295}, 2021.
-
-\bibitem{banner2019post}
-R. Banner, Y. Nahshan, and D. Soudry, ``Post training 4-bit quantization of convolutional networks for rapid-deployment,'' in \textit{NeurIPS}, vol. 32, 2019.
-
-\bibitem{wang2019haq}
-K. Wang et al., ``HAQ: Hardware-aware automated quantization with mixed precision,'' in \textit{CVPR}, pp. 8612--8620, 2019.
-
-\end{thebibliography}
+% \end{thebibliography}
 
 \end{document}

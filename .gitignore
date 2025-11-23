@@ -87,6 +87,7 @@ Thumbs.db
 *.nav
 *.snm
 *.vrb
+Mentor.tex
 
 # Temporary files
 tmp/
