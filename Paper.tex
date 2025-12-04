@@ -42,35 +42,42 @@ Christian Herglotz$^{1}$}\\
 \maketitle
 
 \begin{abstract}
-Deploying deep neural networks (DNNs) on edge platforms requires aggressive compression with minimal accuracy loss. This paper introduces Mix-and-Match Pruning, a globally guided, layer-wise sparsification framework that systematically coordinates multiple pruning criteria to produce architecture-adaptive sparsity profiles. Rather than proposing yet another pruning rule, the framework addresses a fundamental but overlooked challenge: different layers and architectures respond differently to each pruning criterion, and no single method is universally optimal. By exploring layer sensitivity ranges and combining complementary global criteria, Mix-and-Match Pruning generates a family of high-quality sparse models spanning diverse accuracy–sparsity trade-offs. Experiments on CNNs and Vision Transformers, paired with post-training quantization, show substantial improvements in robustness at extreme sparsity. On Swin-Tiny, the method reduces accuracy degradation by 40\% relative to standard single-criterion pruning. The results demonstrate that rethinking how pruning criteria are applied—rather than inventing new ones—unlocks significantly more reliable and deployment-ready compressed models.
+Deploying deep neural networks (DNNs) on edge platforms requires aggressive compression of the model architecture with minimal accuracy loss. This paper introduces Mix-and-Match Pruning. The name reflects the
+core principle: \textit{Mixing} multiple baseline pruning criteria
+to establish layer-wise sparsity ranges, then \textit{Matching}
+these ranges to the architecture by systematically sampling diverse sparsity configuration. It is a globally guided, layer-wise sparsification framework that systematically coordinates multiple pruning criteria to produce architecture-adaptive sparsity profiles. Rather than proposing yet another pruning rule, the framework addresses a fundamental but overlooked challenge: different layers, architectures, and application domains respond differently to each pruning criterion, and no single method is universally optimal. By exploring layer sensitivity ranges and combining complementary global criteria, Mix-and-Match Pruning generates a family of high-quality sparse models spanning diverse accuracy–sparsity trade-offs. Experiments on CNNs and Vision Transformers show substantial improvements in robustness at extreme sparsity. On Swin-Tiny, the method reduces accuracy degradation by 40\% relative to standard single-criterion pruning while achieving 42\% model sparsity. The results demonstrate that rethinking how pruning criteria are applied—rather than inventing new ones—unlocks significantly more reliable and deployment-ready compressed models.
 \end{abstract}
 
 \begin{IEEEkeywords}
-Neural network pruning, post-training quantization, edge deployment, model compression, multi-strategy optimization, architecture-aware pruning
+Neural network pruning, edge deployment, model compression, multi-strategy optimization, architecture-aware pruning
 \end{IEEEkeywords}
 
+\FloatBarrier
 \section{Introduction}
 
-Neural networks achieve state-of-the-art performance across diverse tasks but face critical deployment challenges on edge devices with strict memory ($<$10 MB), computational (GFLOPs), and power constraints \cite{chavan2024edgeai, promwad2024compression}. Modern CNNs exceed 100 MB and transformers reach several hundred megabytes, rendering direct deployment infeasible. While compression techniques including quantization \cite{jacob2018quantization}, knowledge distillation \cite{hinton2015distilling}, and neural architecture search \cite{zoph2017neural} exist, neural network pruning has proven particularly effective by exploiting redundancy in overparameterized networks to achieve substantial parameter reductions while maintaining acceptable accuracy \cite{liu2024memory, zhang2024recap}.
+Deep neural networks have achieved strong performance across diverse vision tasks including image classification, object detection, and semantic segmentation, but face critical deployment challenges on edge devices with strict memory ($<$10 MB), computational (GFLOPs), and power constraints \cite{chavan2024edgeai, promwad2024compression}. Modern CNNs such as ResNet-50 typically require 100--200 MB, while larger vision transformers can exceed 300--500 MB, rendering direct deployment on edge devices infeasible. While compression techniques including quantization \cite{jacob2018quantization}, knowledge distillation \cite{hinton2015distilling}, and neural architecture search \cite{zoph2017neural} exist, neural network pruning has proven particularly effective by exploiting redundancy in overparameterized networks to achieve substantial parameter reductions while maintaining acceptable accuracy \cite{liu2024memory, zhang2024recap}.
 
-Methods have evolved from magnitude-based approaches (MAG) \cite{han2015learning} that remove smallest-magnitude weights, to gradient-based methods like SNIP \cite{lee2018snip} using gradient-weight products, and GraSP \cite{wang2020picking} incorporating Hessian information to preserve gradient flow. These single-shot methods achieve competitive results with minimal computational overhead.
+Pruning methods have evolved from magnitude-based pruning (MAG) \cite{han2015learning} that removes smallest-magnitude weights, to Single-shot Network Pruning (SNIP) \cite{lee2018snip} using gradient-weight products, Gradient Signal Preservation (GraSP) \cite{wang2020picking} incorporating Hessian information to preserve gradient flow, semi-structured pruning for vision transformers (LPViT) \cite{wu2025lpvit}, and joint pruning-quantization optimization (GETA) \cite{geta2025}. Each of these represents a different pruning criterion, that is, a rule for deciding which weights to remove, such as weight magnitude, gradient magnitude, gradient flow preservation, or quantization-aware importance scoring. These methods achieve competitive results compared to iterative pruning approaches with minimal computational overhead.
 
-Existing pruning methods produce single-point solutions for specific target sparsities, requiring complete re-execution for different deployment scenarios with varying accuracy-compression requirements. Furthermore, different architectural components (CNNs, residual networks, transformers) respond differently to pruning: skip connections require conservative pruning to preserve gradient flow \cite{li2017pruning}, while attention mechanisms exhibit global dependencies that affect compression limits \cite{rao2021dynamicvit}. Current single-point methods cannot systematically explore this design space, and empirical evidence for vision transformers under multi-strategy frameworks remains limited. Recent works have begun to explore generating multiple pruned configurations \cite{lee2024mpruner, desai2024llamaflex}, yet a unified framework for hybrid architectures is still needed.
+Existing pruning methods produce single-point solutions for specific target sparsities, requiring complete re-execution for different deployment scenarios with varying accuracy-compression requirements. Furthermore, different architectural components respond differently to pruning: skip connections in residual networks require conservative pruning to preserve gradient flow \cite{li2017pruning}, while attention mechanisms in transformers create global dependencies across all tokens, making them more sensitive to aggressive pruning \cite{rao2021dynamicvit}.
 
-We propose a multi-strategy pruning framework that systematically explores families of solutions by observing baseline pruning behavior to establish architecture-aware sparsity ranges, then generating diverse strategies spanning the accuracy-compression tradeoff space. Combined with post-training quantization, this provides deployment flexibility through multiple operating points without re-executing pruning procedures, achieving multiplicative compression gains suitable for edge deployment \cite{wu2025lpvit}.
+Current single-point methods cannot systematically explore this design space. Moreover, empirical evidence demonstrating the effectiveness of multi-strategy pruning frameworks on vision transformers remains limited. Recent works have begun to explore generating multiple pruned configurations \cite{lee2024mpruner, desai2024llamaflex}, yet a unified framework for hybrid architectures that systematically explores the accuracy-compression tradeoff space is still needed.
+
+We propose Mix-and-Match Pruning, a framework that systematically explores families of solutions through a three-phase process. First, it observes baseline pruning behavior to establish architecture-aware sparsity ranges (minimum and maximum pruning levels per layer). Then, it generates diverse sparsity configurations spanning the accuracy-compression tradeoff space. This provides deployment flexibility through multiple operating points without re-executing pruning procedures, achieving substantial compression suitable for edge deployment \cite{wu2025lpvit}.
 
 The main contributions of this paper are:
 \begin{itemize}
-    \item Mix-and-Match Pruning, a layer-wise, multi-strategy framework is introduced that derives architecture-aware sparsity ranges using multiple global criteria and generates diverse pruning strategies through systematic multi-criterion exploration.
-    \item Multi-point pruning outputs are provided which enable practitioners to select among several accuracy--sparsity configurations without re-executing pruning, unlike traditional single-point approaches.
-    \item A comprehensive evaluation is conducted across CNNs and ViTs, demonstrating when multi-strategy exploration yields substantial benefits and identifying regimes where baseline criteria perform comparably.
+    \item A layer-wise pruning framework that derives architecture-aware sparsity ranges from multiple baseline criteria and systematically generates diverse sparsity configurations through multi-criterion exploration.
+    \item A family of pruned models spanning different accuracy--sparsity trade-offs, enabling practitioners to select deployment configurations without re-executing the pruning procedure.
+    \item A comprehensive evaluation across CNNs and ViTs, identifying cases in which the proposed approach yields substantial benefits over single-criterion baselines.
 \end{itemize}
 
 The remainder of this paper is organized as follows: Section~\ref{sec:method} presents the methodology, Section~\ref{sec:results} provides experimental results and analysis, and Section~\ref{sec:conclusion} concludes the paper.
 
+\FloatBarrier
 \section{Mix-and-Match Pruning Methodology}
 \label{sec:method}
-Mix-and-Match Pruning is architecture-agnostic and consists of three phases: range establishment, strategy generation, and pruning execution. A pretrained network is provided as input, and a family of pruned models is produced as output. The key idea is that established pruning criteria exhibit stable and consistent patterns across layer types. These patterns are used to construct sparsity ranges that capture natural compression behavior and serve as boundaries for systematic exploration. Figure~\ref{method} illustrates the overall workflow.
+Mix-and-Match Pruning is architecture-agnostic and consists of three phases: range establishment, strategy generation, and pruning execution. In this work, a ``strategy'' refers to a specific layer-wise sparsity configuration (i.e., a target sparsity level for each layer), not a pruning criterion. A pretrained network and a small labeled calibration set (typically 5--10\% of the training data) are provided as inputs, and a family of pruned models is produced as output. The key idea is that established pruning criteria exhibit stable and consistent patterns in layer-wise sparsity distributions, that is, each criterion consistently identifies which layers can tolerate higher pruning and which require preservation, with this behavior remaining consistent across different target sparsity levels and layer types (e.g., convolutional layers, attention blocks, and feed-forward layers in transformers). These patterns are used to construct sparsity ranges that capture natural compression behavior and serve as boundaries for systematic exploration. Figure~\ref{method} illustrates the overall workflow.
 
 % \begin{figure}[htbp]
 % \centering
@@ -121,9 +128,9 @@ Mix-and-Match Pruning is architecture-agnostic and consists of three phases: ran
 % \label{fig:framework}
 % \end{figure}
 
-\begin{figure*}[ht]
+\begin{figure*}[!t]
     \centering
-    \includegraphics[width=0.9\textwidth]{prune.pdf}
+    \includegraphics[width=0.85\textwidth]{prune.pdf}
     \caption{Mix-and-Match Pruning Methodology}
     \label{method}
 \end{figure*}
@@ -131,7 +138,7 @@ Mix-and-Match Pruning is architecture-agnostic and consists of three phases: ran
 
 \subsection{Phase 1: Architecture-Aware Range Establishment}
 
-In the first phase (Algorithm~\ref{alg:multistrategy}, lines 3--12), layer-wise sparsity ranges $[\rho_{min}^{(l)}, \rho_{max}^{(l)}]$ are derived for each layer $l$ by applying the user-specified set of pruning criteria at several global sparsity targets. Let $\mathcal{B}$ denote the user-selected baseline methods and $\mathcal{T}$ the set of target sparsities. For each method--target pair, the resulting sparsity $\rho_{b,t}^{(l)}$ is recorded. Minimum and maximum sparsities across all executions are then computed:
+In the first phase (Algorithm~\ref{alg:multistrategy}, lines 3--12), the method derives layer-wise sparsity ranges for each layer $l$ by applying the user-specified set of pruning criteria at several global sparsity targets. Here, $\rho$ denotes the fraction of weights pruned (set to zero) in a given layer, and the ranges are expressed as $[\rho_{min}^{(l)}, \rho_{max}^{(l)}]$. Let $\mathcal{B}$ denote the set of baseline pruning methods and $\mathcal{T}$ the set of target sparsities. For each method--target pair, the resulting layer-wise sparsity $\rho_{b,t}^{(l)}$ is recorded by running baseline method $b$ at global target $t$ on a small calibration set of labeled data (typically 5--10\% of the training set). Minimum and maximum sparsities across all executions are then computed based purely on observed sparsity distributions, without filtering by accuracy:
 
 \begin{equation}
 \rho_{min}^{(l)} = \min \{\rho_{b,t}^{(l)} \mid b \in \mathcal{B}, t \in \mathcal{T}\},
@@ -141,32 +148,32 @@ In the first phase (Algorithm~\ref{alg:multistrategy}, lines 3--12), layer-wise 
 \rho_{max}^{(l)} = \max \{\rho_{b,t}^{(l)} \mid b \in \mathcal{B}, t \in \mathcal{T}\}.
 \end{equation}
 
-These bounds define the empirical sensitivity envelope within which multi-strategy exploration is performed. Structural constraints (e.g., unprunable normalization layers, minimally pruned small layers, and conservative treatment of transformer patch embeddings) are applied conceptually here, while the specific threshold values and their empirical justification are presented in Section~\ref{sec:results}.
+These bounds define the empirical range of layer-wise sparsity values observed across different baseline methods, establishing feasible limits for exploration. Accuracy is evaluated later during strategy selection (Phase 3), not during range establishment. Structural constraints (e.g., unprunable normalization layers~\cite{li2017pruning}, minimally pruned small layers, and conservative treatment of transformer patch embeddings~\cite{dosovitskiy2021vit}) are then applied to these ranges, with specific threshold values and their empirical justification presented in Section~\ref{sec:results}.
 
 % These bounds provide conservative, empirically grounded limits for exploration. Structural constraints are applied to preserve functional integrity: normalization layers are assigned fixed ranges of $[0\%, 0\%]$; small layers with fewer than 10K parameters receive $[0\%, 10\%]$; and transformer patch embeddings receive $[15\%, 30\%]$ to maintain essential token representations.
 
 
 \subsection{Phase 2: Multi-Strategy Generation}
 
-This phase generates a set of pruning strategies by systematically sampling the layer-wise sparsity ranges obtained in Phase~1 (Algorithm~\ref{alg:multistrategy}, lines 13--18). Ten strategies are produced, each specifying a complete sparsity configuration
+Having established layer-wise sparsity ranges by observing multiple baseline criteria in Phase~1, this phase generates a set of pruning strategies by systematically sampling those ranges (Algorithm~\ref{alg:multistrategy}, lines 13--18). Importantly, each strategy is \emph{not} a mixture of different baseline pruning criteria (e.g., partly MAG and partly SNIP). Instead, each strategy specifies a complete layer-wise sparsity configuration—a target sparsity level for each layer—that defines \emph{where} and \emph{how much} to prune. A pruning criterion applied in Phase~3 then determines \emph{which weights} to prune to achieve these targets. We generate ten strategies, a number chosen to balance diversity and computational cost, each specifying a complete sparsity configuration
 
 \begin{equation}
 \boldsymbol{\rho} = [\rho^{(1)}, \rho^{(2)}, \ldots, \rho^{(L)}],
 \end{equation}
 
-where $L$ denotes the number of prunable layers.
+where $L$ denotes the total number of prunable layers in the network.
 
-Three core strategies directly reflect the established bounds: a \emph{conservative} strategy assigns $\rho_{min}^{(l)}$ to every layer, an \emph{aggressive} strategy assigns $\rho_{max}^{(l)}$, and a \emph{balanced} strategy uses the midpoint of the range. These provide lower, upper, and central reference configurations.
+\textbf{Strategies 1--3 (Core bounds):} Three core strategies directly reflect the established bounds: (1) a \emph{conservative} strategy assigns $\rho_{min}^{(l)}$ to every layer, (2) an \emph{aggressive} strategy assigns $\rho_{max}^{(l)}$, and (3) a \emph{balanced} strategy uses the midpoint of the range. These provide lower, upper, and central reference configurations.
 
-To explore intermediate behaviours, four percentile-based strategies are generated by interpolating within each layer's range using $\alpha \in \{0.3,\,0.5,\,0.7,\,0.9\}$:
+\textbf{Strategies 4--7 (Percentile-based):} To explore intermediate behaviours, four percentile-based strategies are generated by interpolating within each layer's range using interpolation coefficient $\alpha \in \{0.3,\,0.5,\,0.7,\,0.9\}$:
 
 \begin{equation}
 \rho^{(l)} = \rho_{min}^{(l)} + \alpha\big(\rho_{max}^{(l)} - \rho_{min}^{(l)}\big).
 \end{equation}
 
-These yield progressively more aggressive sparsity assignments while remaining within empirically validated limits.
+These values correspond to the 30th, 50th, 70th, and 90th percentiles of the sparsity range, yielding progressively more aggressive sparsity assignments while remaining within empirically validated limits.
 
-A parameter-proportional strategy is constructed by scaling each layer's sparsity based on its parameter count:
+\textbf{Strategy 8 (Parameter-proportional):} A parameter-proportional strategy is constructed by scaling each layer's sparsity based on its parameter count:
 
 \begin{equation}
 \rho^{(l)} = \rho_{min}^{(l)} + \beta\big(\rho_{max}^{(l)} - \rho_{min}^{(l)}\big),
@@ -175,9 +182,9 @@ A parameter-proportional strategy is constructed by scaling each layer's sparsit
 \beta = \min\left(1.0,\, \frac{|\mathcal{W}^{(l)}|}{|\mathcal{W}_{avg}|} \cdot 0.1\right),
 \end{equation}
 
-which biases pruning toward larger layers while preventing over-pruning of small ones.
+where $|\mathcal{W}^{(l)}|$ is the number of weights in layer $l$ and $|\mathcal{W}_{avg}|$ is the average number of weights per layer across the network. This biases pruning toward larger layers while preventing over-pruning of small ones.
 
-Finally, two structure-aware strategies are produced: a \emph{classifier-heavy} variant that allocates higher sparsity to late-stage layers, and a \emph{feature-heavy} variant that increases sparsity in early convolutional or embedding layers. Both are generated by adjusting the interpolation coefficients according to layer type.
+\textbf{Strategies 9--10 (Structure-aware):} Finally, two strategies aware of network architectural structure,that is, the positional and functional roles of layers, are produced: (9) a \emph{classifier-heavy} variant that allocates higher sparsity to late-stage layers (classification heads), and (10) a \emph{feature-heavy} variant that increases sparsity in early convolutional or embedding layers (feature extractors). Both are generated by adjusting the interpolation coefficient $\alpha$ according to layer depth and type.
 
 Together, these ten strategies provide a diverse, systematically constructed set of pruning configurations spanning conservative, aggressive, intermediate, parameter-aware, and structure-aware pruning behaviours.
 
@@ -185,20 +192,22 @@ Together, these ten strategies provide a diverse, systematically constructed set
 
 In the final phase (Algorithm~\ref{alg:multistrategy}, lines 19--29), each strategy is instantiated using sensitivity-based pruning followed by mask application and fine-tuning. Multiple sensitivity formulations may be selected by the user, and each strategy is executed once per chosen formulation, yielding a set of pruned models for comparative evaluation.
 
-\textbf{Sensitivity-Based Weight Selection.}
-Three scoring rules are supported to characterize weight importance:
+\textbf{Sensitivity-Based Pruning.}
+Three scoring rules are supported to characterize weight importance, where $i$ indexes individual weights within layer $l$:
 
 \begin{enumerate}
-    \item \textit{Magnitude-only:} \quad $S_i^{(l)} = |w_i^{(l)}|$
-    \item \textit{Gradient-only:} \quad $S_i^{(l)} = \left|\frac{\partial \mathcal{L}}{\partial w_i^{(l)}}\right|$
-    \item \textit{Magnitude--gradient product:} \quad $S_i^{(l)} = |w_i^{(l)}| \cdot \left|\frac{\partial \mathcal{L}}{\partial w_i^{(l)}}\right|$
+    \item \textit{Magnitude-only:} \quad $S_{i,\text{mag}}^{(l)} = |w_i^{(l)}|$ \cite{han2015learning}
+    \item \textit{Gradient-only:} \quad $S_{i,\text{grad}}^{(l)} = \left|\frac{\partial \mathcal{L}}{\partial w_i^{(l)}}\right|$ \cite{lee2018snip}
+    \item \textit{Magnitude--gradient product:} \quad $S_{i,\text{prod}}^{(l)} = |w_i^{(l)}| \cdot \left|\frac{\partial \mathcal{L}}{\partial w_i^{(l)}}\right|$ \cite{wang2020picking}
 \end{enumerate}
 
-These formulations quantify weight saliency from complementary perspectives: static structural relevance (magnitude), dynamic training sensitivity (gradient), and a combined measure reflecting both. Gradients are accumulated over a held-out set and normalized to ensure comparability across layers. After computing $S_i^{(l)}$, weights within each layer are ranked, and the lowest-ranked $\rho^{(l)}$ proportion is pruned using binary masks:
+These formulations quantify weight saliency from complementary perspectives: static structural relevance (magnitude)~\cite{han2015learning}, dynamic training sensitivity (gradient)~\cite{lee2018snip}, and a combined measure reflecting both~\cite{wang2020picking}. Gradients are accumulated over a held-out calibration set and normalized to ensure comparability across layers. After computing the selected sensitivity metric $S_i^{(l)}$ for all weights, weights within each layer are ranked, and the lowest-ranked $\rho^{(l)}$ proportion is pruned using binary masks:
 
 \begin{equation}
-\mathcal{M}^{(l)} \in \{0,1\}^{|\mathcal{W}^{(l)}|}.
+\mathcal{M}^{(l)} \in \{0,1\}^{|\mathcal{W}^{(l)}|},
 \end{equation}
+
+where $\mathcal{M}^{(l)}$ is a binary vector of length $|\mathcal{W}^{(l)}|$ (the number of weights in layer $l$), with each element $\mathcal{M}_i^{(l)}$ set to 1 to retain weight $w_i^{(l)}$ or 0 to prune it.
 
 Executing all selected scoring rules for each strategy produces multiple pruned variants, enabling empirical identification of the most suitable criterion for a given architecture.
 
@@ -209,7 +218,7 @@ Pruning is applied by zeroing masked weights:
 \tilde{w}_i^{(l)} = \mathcal{M}_i^{(l)} \cdot w_i^{(l)}.
 \end{equation}
 
-Fine-tuning is performed to recover accuracy lost due to pruning. During fine-tuning, masked weights remain fixed at zero, and gradient updates are restricted to unpruned parameters. Masks are re-applied after every optimization step to enforce sparsity invariance. This procedure stabilizes training, preserves the intended sparsity pattern, and mitigates accuracy degradation while ensuring consistent evaluation across all strategies and sensitivity variants.
+Fine-tuning is performed to recover accuracy lost due to pruning. During fine-tuning, masked weights remain fixed at zero by re-applying the binary mask $\mathcal{M}^{(l)}$ after every gradient update step: $w_i^{(l)} \leftarrow \mathcal{M}_i^{(l)} \cdot w_i^{(l)}$, where $i$ indexes individual weights within layer $l$. This ensures pruned weights stay at zero and gradient updates are restricted to unpruned parameters only.
 
 
 % \textbf{Post-Training Quantization.}
@@ -234,8 +243,8 @@ Fine-tuning is performed to recover accuracy lost due to pruning. During fine-tu
 \caption{Mix-and-Match Pruning Framework}
 \label{alg:multistrategy}
 \begin{algorithmic}[1]
-\STATE \textbf{Input:} Pretrained network $\mathcal{N}$, baselines $\mathcal{B}$, sparsity targets $\mathcal{T}$, criteria $\mathcal{C}$
-\STATE \textbf{Output:} Pruned models $\{\mathcal{N}_{s,c}\}$
+\STATE \textbf{Input:} Pretrained network $\mathcal{N}$, pruning baselines $\mathcal{B}$ (e.g., MAG, SNIP), sparsity targets $\mathcal{T}$, pruning criteria $\mathcal{C}$ (e.g., magnitude, gradient)
+\STATE \textbf{Output:} Pruned models $\{\mathcal{N}_{s,c}\}$ where $s$ indexes strategies and $c$ indexes criteria
 
 \STATE \textbf{// Phase 1: Range Establishment}
 \FOR{$b \in \mathcal{B}$}
@@ -246,7 +255,7 @@ Fine-tuning is performed to recover accuracy lost due to pruning. During fine-tu
 \FOR{each layer $l$}
     \STATE $\rho_{min}^{(l)} \gets \min_{b,t}\rho_{b,t}^{(l)}$, \;
            $\rho_{max}^{(l)} \gets \max_{b,t}\rho_{b,t}^{(l)}$
-    \STATE Apply structural constraints to $(\rho_{min}^{(l)},\rho_{max}^{(l)})$
+    \STATE Update bounds $[\rho_{min}^{(l)},\rho_{max}^{(l)}]$ with structural constraints (e.g., force $\rho^{(l)}=0$ for BatchNorm)
 \ENDFOR
 
 \STATE \textbf{// Phase 2: Strategy Generation}
@@ -278,6 +287,7 @@ Fine-tuning is performed to recover accuracy lost due to pruning. During fine-tu
 
 % \textbf{Computational Considerations.} The range establishment phase (lines 5-12) requires running three baseline methods at multiple sparsity targets, representing a one-time setup cost of approximately three times a single baseline evaluation. However, this cost is amortized across the ten generated strategies and can be reused for future pruning tasks on the same architecture. Importantly, the reported inference FLOPs measure per-forward-pass computational requirements of the final pruned models and are identical across methods because unstructured pruning maintains layer dimensions. Training and setup costs are one-time expenses not included in deployment metrics, following standard practice in pruning literature.
 
+\FloatBarrier
 \section{Experimental Evaluation}
 \label{sec:results}
 \subsection{Experimental Setup}
@@ -303,54 +313,90 @@ Swin-Tiny & CIFAR-100 & 27.6M & 89.14 \\
 Since unstructured pruning maintains original tensor dimensions, theoretical Floating Point Operations (FLOPs) remain unchanged. Nonetheless, sparsification substantially reduces the memory footprint of the resulting models and enables acceleration on sparse-aware hardware. These properties make the baselines in Table~\ref{tab:baselines} suitable for examining how globally guided, layer-adaptive sparsity interacts with architectural diversity and dataset scale.
 
 
-All pruned models are fine-tuned to recover accuracy under a unified optimization protocol to ensure comparability across architectures and pruning strategies. Adam is used as the optimizer with an initial learning rate of $10^{-4}$, a batch size of 128, and a cosine annealing schedule that decays the learning rate from $10^{-4}$ to $10^{-6}$. During fine-tuning, parameter masks are enforced after every update to preserve the imposed sparsity pattern. The number of fine-tuning epochs is set to 20 for VGG-11, ResNet-18, and LeViT-384, while Swin-Tiny is fine-tuned for 30 epochs due to its hierarchical window-based attention, which demonstrates slower convergence when subjected to high sparsity. MAG, SNIP, and GraSP are included as representative baseline pruning criteria and can be selected by the user within the framework; these baselines follow the same fine-tuning configuration to maintain fairness in comparison.
+All pruned models are fine-tuned to recover accuracy under a unified optimization protocol to ensure comparability across architectures and pruning strategies. The Adam optimizer~\cite{kingma2014adam} is used with a fixed learning rate of $1 \times 10^{-4}$ for VGG-11 and $5 \times 10^{-5}$ for ResNet-18, LeViT-384, and Swin-Tiny (AdamW~\cite{loshchilov2019decoupled} for LeViT-384 with weight decay of 0.05), with a batch size of 128. During fine-tuning, parameter masks are enforced after every gradient update to preserve the imposed sparsity pattern. Early stopping with a patience of 3 epochs is employed to prevent overfitting. The number of fine-tuning epochs is capped at 20 for VGG-11, ResNet-18, and LeViT-384, while Swin-Tiny uses up to 30 epochs due to its hierarchical window-based attention, which demonstrates slower convergence when subjected to high sparsity. Five representative baseline pruning methods are included: MAG (magnitude pruning)~\cite{han2015learning}, which removes weights with the smallest absolute values; SNIP (Single-shot Network Pruning)~\cite{lee2018snip}, which uses connection sensitivity based on the product of gradients and weights before training; GraSP (Gradient Signal Preservation)~\cite{wang2020picking}, which leverages gradient flow and Hessian information to identify and preserve critical connections; LPViT~\cite{wu2025lpvit}, which applies semi-structured pruning optimized for vision transformer architectures; and GETA~\cite{geta2025}, which employs joint optimization with quantization-aware importance scoring. These baselines can be selected by the user within the framework and follow the same fine-tuning configuration to maintain fairness in comparison.
 
 Architecture-aware structural constraints are incorporated into Mix-and-Match Pruning to prevent degradation from overly aggressive sparsification in sensitive components. The specific thresholds used in all experiments are:
 
 \begin{itemize}
-    \item \textbf{Normalization layers} (BatchNorm, LayerNorm): fixed sparsity range of $[0\%, 0\%]$ to preserve statistical stability.
-    \item \textbf{Small layers} with fewer than 10K parameters: capped at a conservative range of $[0\%, 10\%]$, as empirical analysis shows that aggressive pruning disproportionately harms accuracy for such layers.
-    \item \textbf{Transformer patch embeddings}: restricted to $[15\%, 30\%]$ sparsity to maintain token diversity and avoid collapse of early-stage representations.
+    \item \textbf{Normalization layers} (BatchNorm, LayerNorm): fixed at $0\%$ sparsity (unprunable) to preserve statistical stability~\cite{li2017pruning}.
+    \item \textbf{Small layers} with fewer than 10K parameters: capped at a conservative range of $[0\%, 10\%]$, as empirical analysis shows that aggressive pruning disproportionately harms accuracy for such layers~\cite{han2015learning}.
+    \item \textbf{Transformer patch embeddings}: restricted to $[15\%, 30\%]$ sparsity to maintain token diversity and avoid collapse of early-stage representations~\cite{dosovitskiy2021vit}.
 \end{itemize}
 
 These empirically derived ranges guide feasible sparsity exploration and are further analyzed and justified in the results.
 
-The evaluation relies on several metrics that capture sparsification level, predictive performance, and quantization robustness. Sparsity is defined as the global percentage of weights set to zero across all prunable layers, computed as the ratio of zero-valued weights to the total number of weights. Bias parameters are excluded, and normalization layers (BatchNorm, LayerNorm) are preserved through architecture-aware constraints. FLOPs are intentionally not reported because unstructured pruning preserves the original tensor dimensions and therefore leaves theoretical FLOPs unchanged across all pruning strategies. Since the focus of this work is not on reducing theoretical computation but on examining how different sensitivity-based pruning criteria—and their combinations—affect accuracy under high sparsity, FLOPs do not provide informative differentiation among methods. Predictive performance is measured using FP32 accuracy after fine-tuning and INT8 accuracy obtained through post-training quantization with 8-bit weights and FP32 activations. The accuracy drop is expressed as the difference between the unpruned FP32 baseline and the final INT8 model, capturing the combined effect of pruning and quantization.
+The evaluation relies on several metrics that capture sparsification level and predictive performance. Sparsity is defined as the global percentage of weights set to zero across all prunable layers, computed as the ratio of zero-valued weights to the total number of weights. Bias parameters are excluded, and normalization layers (BatchNorm, LayerNorm) are preserved through architecture-aware constraints. Predictive performance is measured using FP32 accuracy after fine-tuning. The accuracy drop is expressed as the difference between the unpruned FP32 baseline and the pruned model.
 
+\FloatBarrier
+\subsection{Computational Complexity Analysis}
+\label{sec:complexity}
 
+The Mix-and-Match framework introduces a one-time setup cost in Phase~1 (range establishment) that is amortized across the generation of multiple pruning strategies. This section analyzes the computational overhead compared to baseline single-criterion methods.
+
+\textbf{Complexity of Phase 1 (Range Establishment).}
+Phase~1 runs each baseline method $b \in \mathcal{B}$ at each target sparsity $t \in \mathcal{T}$ to establish layer-wise sparsity ranges. For a network with $L$ prunable layers, the time complexity is:
+
+\begin{equation}
+\mathcal{O}_{\text{Phase 1}} = |\mathcal{B}| \times |\mathcal{T}| \times \mathcal{C}_{\text{prune}}(L),
+\end{equation}
+
+where $\mathcal{C}_{\text{prune}}(L)$ denotes the cost of executing a single pruning criterion (scoring, ranking, and masking weights across $L$ layers). In our experiments, $|\mathcal{B}| = 3$ (MAG, SNIP, GraSP) and $|\mathcal{T}| = 3$ (70\%, 80\%, 90\% sparsity targets), yielding a multiplicative factor of 9 compared to running a single baseline once.
+
+\textbf{Complexity of Phase 2 (Strategy Generation).}
+Phase~2 is negligible, consisting only of interpolation operations within pre-established ranges. Generating all 10 strategies requires $\mathcal{O}(L)$ arithmetic operations and is completed in milliseconds.
+
+\textbf{Complexity of Phase 3 (Pruning Execution).}
+Each of the 10 strategies is executed once per selected sensitivity criterion. If $|\mathcal{C}|$ criteria are chosen (e.g., magnitude-only, gradient-only, magnitude-gradient product), the cost is:
+
+\begin{equation}
+\mathcal{O}_{\text{Phase 3}} = 10 \times |\mathcal{C}| \times \mathcal{C}_{\text{prune+ft}}(L),
+\end{equation}
+
+where $\mathcal{C}_{\text{prune+ft}}(L)$ includes pruning, masking, and fine-tuning. Since fine-tuning dominates this cost and is identical across all methods, the per-model overhead is equivalent to that of a single baseline.
+
+\textbf{Comparison with Baselines.}
+Running a single baseline method (e.g., MAG) at one target sparsity requires $\mathcal{C}_{\text{prune+ft}}(L)$ operations. To obtain the same diversity of solutions using traditional single-criterion methods, one would need to: (1) run MAG, SNIP, and GraSP separately at various sparsity targets, (2) manually tune per-layer sparsity configurations, and (3) re-execute pruning for each new configuration. The total cost for generating 10 comparable configurations with baselines would be at least $10 \times \mathcal{C}_{\text{prune+ft}}(L)$, plus additional hyperparameter search overhead.
+
+\textbf{Amortized Advantage.}
+Mix-and-Match incurs a one-time setup cost of $9 \times \mathcal{C}_{\text{prune}}(L)$ in Phase~1, but produces 10 diverse strategies in Phase~3 at a cost of $10 \times \mathcal{C}_{\text{prune+ft}}(L)$. Since $\mathcal{C}_{\text{prune}} \ll \mathcal{C}_{\text{prune+ft}}$ (scoring and masking are orders of magnitude faster than fine-tuning), the effective per-strategy cost is comparable to running a single baseline. Crucially, the framework provides multi-point exploration (10 strategies spanning the accuracy-sparsity trade-off space without re-execution), architecture-aware bounds (empirically validated sparsity ranges prevent over- or under-pruning), and systematic coverage (strategies are generated deterministically, ensuring reproducibility). In practice, the upfront cost of Phase~1 is justified when practitioners require multiple deployment configurations or wish to explore the Pareto front of accuracy-sparsity trade-offs. For scenarios requiring only a single pruned model, traditional baseline methods remain computationally preferable.
+
+\textbf{Practical Runtime.}
+On an NVIDIA A100 GPU, Phase~1 (range establishment) for VGG-11 completes in approximately 15 minutes, while each Phase~3 strategy execution (pruning + fine-tuning for 20 epochs) requires 8--10 minutes. Generating all 10 strategies takes roughly 90 minutes total, comparable to running 9--11 baseline executions individually, but with the added benefit of systematic exploration and architecture-aware sparsity allocation.
+
+\FloatBarrier
 \subsection{Pruning Results}
 
-Table~\ref{tab:vgg_results} reports the pruning outcomes for VGG-11 using ten strategies generated by the proposed framework under post-training quantization. For this architecture, the optimal sensitivity score is found to be the product of weight magnitude and gradient magnitude, and all results in the table correspond to this combined metric. The set of strategies produced by the framework spans a broad range of pruning intensities, enabling systematic exploration of the layer-wise sparsity space from conservative to highly aggressive configurations. Across all strategies, the mean INT8 accuracy is 90.19\% ± 0.14\% at approximately 90\% sparsity, indicating highly stable performance with minimal variance. The Middle 50th Percentile strategy yields the strongest result, achieving 90.42\% INT8 accuracy with an accuracy drop of only 1.97\% relative to the dense baseline. 
+The Mix-and-Match framework addresses a multi-objective optimization problem with two competing goals: maximizing sparsity (compression) while maximizing accuracy (performance). In this context, a strategy is considered \textit{Pareto-efficient} (or non-dominated) if no other strategy achieves both higher accuracy and higher sparsity simultaneously. The ``best-performing'' strategy for a given architecture refers to the solution with the lowest accuracy drop among configurations at comparable sparsity levels, representing a favorable point on the Pareto front. The following tables present results for all four architectures, with strategies spanning diverse trade-off points to enable flexible deployment.
 
-\begin{table}[!htbp]
+Table~\ref{tab:vgg_results} reports the pruning outcomes for VGG-11. The optimal sensitivity criterion for this architecture is the product of magnitude and gradient, yielding a mean FP32 accuracy of 90.17\% ± 0.17\% at approximately 90\% sparsity across all ten strategies. The Middle 50th Percentile strategy achieves the best performance: 90.41\% accuracy at 89.60\% sparsity (1.99\% drop from the 92.40\% baseline). 
+
+\begin{table}[!ht]
 \centering
-\caption{Mix-and-Match Pruning Results for VGG-11. All results use the combined magnitude–gradient sensitivity metric.}
+\caption{Mix-and-Match Pruning Results for VGG-11 (baseline accuracy: 92.40\%). All results use the combined magnitude–gradient sensitivity metric.}
 \label{tab:vgg_results}
 \scriptsize
 \setlength{\tabcolsep}{3pt}
-\begin{tabular}{lcccc}
+\begin{tabular}{lccc}
 \toprule
 Pruning Strategy
-& Sparsity(\%) 
-& \begin{tabular}[c]{@{}c@{}}FP32 \\ Accuracy (\%)\end{tabular} 
-& \begin{tabular}[c]{@{}c@{}}INT8 \\ Accuracy (\%)\end{tabular} 
+& Sparsity(\%)
+& \begin{tabular}[c]{@{}c@{}}FP32 \\ Accuracy (\%)\end{tabular}
 & \begin{tabular}[c]{@{}c@{}}Accuracy \\ Drop (\%)\end{tabular} \\
 \midrule
-Max Aggressive      & 90.40 & 90.25 & 90.23 & 2.16 \\
-Min Conservative    & 89.20 & 90.20 & 90.25 & 2.14 \\
-Balanced            & 89.60 & 89.85 & 89.88 & 2.51 \\
-Classifier Heavy    & 89.50 & 90.21 & 90.22 & 2.17 \\
-Conv Aggressive     & 88.31 & 90.19 & 90.19 & 2.20 \\
-Lower 30th pctl& 89.68 & 90.10 & 90.12 & 2.27 \\
-Middle 50th pctl& 89.60 & 90.41 & \textbf{90.42} & \textbf{1.97} \\
-Upper 70th pctl& 91.52 & 90.23 & 90.22 & 2.17 \\
-Upper 90th pctl& 91.84 & 89.96 & 90.01 & 2.38 \\
-Param-Proportional  & 90.24 & 90.28 & 90.29 & 2.10 \\
+Max Aggressive      & 90.40 & 90.25 & 2.16 \\
+Min Conservative    & 89.20 & 90.20 & 2.14 \\
+Balanced            & 89.60 & 89.85 & 2.51 \\
+Classifier Heavy    & 89.50 & 90.21 & 2.17 \\
+Conv Aggressive     & 88.31 & 90.19 & 2.20 \\
+Lower 30th pctl& 89.68 & 90.10 & 2.27 \\
+Middle 50th pctl& \textbf{89.60} & \textbf{90.41} & \textbf{1.97} \\
+Upper 70th pctl& 91.52 & 90.23 & 2.17 \\
+Upper 90th pctl& 91.84 & 89.96 & 2.38 \\
+Param-Proportional  & 90.24 & 90.28 & 2.10 \\
 \midrule
-\textbf{Mean ± Std} 
-& 90.09±1.03 
-& 90.17±0.17 
-& 90.18±0.17 
+\textbf{Mean ± Std}
+& 90.09±1.03
+& 90.17±0.17
 & 2.19±0.15 \\
 \bottomrule
 \end{tabular}
@@ -360,74 +406,69 @@ Param-Proportional  & 90.24 & 90.28 & 90.29 & 2.10 \\
 
 % A comparison with established pruning methods at matched sparsity is provided in Table~\ref{tab:vgg_baselines}.
 
-Table~\ref{tab:resnet_results} presents the pruning results for ResNet-18. For this architecture, the sensitivity analysis indicates that weight magnitude alone provides the most reliable pruning criterion, outperforming gradient-based and combined metrics. All results in the table therefore use magnitude-only sensitivity scores. The residual structure of ResNet-18 requires careful range establishment to preserve skip-connection pathways and maintain stable gradient flow during pruning, and the generated strategies cover a broad span of sparsity levels while respecting these architectural constraints. Across strategies, the mean INT8 accuracy reaches 97.62\% ± 0.44\% at approximately 83\% sparsity, indicating strong stability with low variance. The best-performing configuration is the \textit{parameter-proportional} strategy, which achieves 98.12\% INT8 accuracy with only a 1.20\% drop relative to the 99.32\% dense baseline.
+Table~\ref{tab:resnet_results} presents results for ResNet-18, where magnitude-only sensitivity proves most effective. Unlike VGG-11, ResNet-18's residual connections create stable gradient flow paths that reduce the need for gradient-based pruning signals; magnitude alone effectively identifies redundant weights. Strategies span 73--90\% sparsity, achieving a mean FP32 accuracy of 97.63\% ± 0.43\% at approximately 83\% sparsity. The \textit{parameter-proportional} strategy yields the best result: 98.11\% accuracy with only a 1.20\% drop from the 99.32\% baseline.
 
 
-\begin{table}[!htbp]
+\begin{table}[!ht]
 \centering
-\caption{Mix-and-Match Pruning Results for ResNet-18. All results use the  magnitude sensitivity metric.}
+\caption{Mix-and-Match Pruning Results for ResNet-18 (baseline accuracy: 99.32\%). All results use the magnitude sensitivity metric.}
 \label{tab:resnet_results}
 \scriptsize
 \setlength{\tabcolsep}{4pt}
-\begin{tabular}{lcccc}
+\begin{tabular}{lccc}
 \toprule
-Strategy & Sparsity (\%) & \begin{tabular}[c]{@{}c@{}}FP32 \\ Accuracy (\%)\end{tabular} & 
-\begin{tabular}[c]{@{}c@{}}INT8 \\ Accuracy (\%)\end{tabular} &
+Strategy & Sparsity (\%) & \begin{tabular}[c]{@{}c@{}}FP32 \\ Accuracy (\%)\end{tabular} &
 \begin{tabular}[c]{@{}c@{}}Accuracy \\ Drop (\%)\end{tabular} \\
 \midrule
-max\_aggressive           & 89.61 & 97.85 & 97.84 & 1.48 \\
-min\_conservative         & 72.78 & 97.51 & 97.52& 1.80 \\
-balanced                  & 82.79 & 97.19 & 97.18 & 2.14 \\
-fc\_heavy                 & 72.84 & 97.54 & 97.54 & 1.78 \\
-late\_s\_aggressive& 87.55 & 97.98 & 97.99 & 1.33 \\
-lower\_30th\_pctl& 78.79 & 96.85 & 96.85 & 2.47 \\
-middle\_50th\_pctl& 82.79 & 97.21 & 97.21 & 2.11 \\
-upper\_70th\_pctl& 86.80 & 97.19 & 97.15 & 2.17 \\
-upper\_90th\_pctl& 90.06 & 97.85 & 97.85 & 1.47 \\
-Param-Prop.& 87.28 & \textbf{98.11} & \textbf{98.12} & \textbf{1.20} \\
+max\_aggressive           & 89.61 & 97.85 & 1.48 \\
+min\_conservative         & 72.78 & 97.51 & 1.80 \\
+balanced                  & 82.79 & 97.19 & 2.14 \\
+fc\_heavy                 & 72.84 & 97.54 & 1.78 \\
+late\_s\_aggressive& 87.55 & 97.98 & 1.33 \\
+lower\_30th\_pctl& 78.79 & 96.85 & 2.47 \\
+middle\_50th\_pctl& 82.79 & 97.21 & 2.11 \\
+upper\_70th\_pctl& 86.80 & 97.19 & 2.17 \\
+upper\_90th\_pctl& 90.06 & 97.85 & 1.47 \\
+Param-Prop.& \textbf{87.28} & \textbf{98.11} & \textbf{1.20} \\
 \midrule
-\textbf{Mean ± Std} 
-& 82.95±6.61 
-& 97.63±0.43 
-& 97.62±0.44 
+\textbf{Mean ± Std}
+& 82.95±6.61
+& 97.63±0.43
 & 1.80±0.39 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 
-Table~\ref{tab:levit_results} presents the pruning results for LeViT-384 across all ten Mix-and-Match strategies using PTQ.  In contrast to CNNs—where magnitude-based or magnitude–gradient hybrid sensitivity often performs best—the LeViT architecture shows that gradient-only sensitivity provides the most reliable pruning signal, especially for preserving attention pathways.  All reported results therefore use gradient-based sensitivity scores. Mean INT8 accuracy is \textbf{97.10\% $\pm$ 0.16\%} at approximately \textbf{54\% sparsity}, exhibiting exceptionally low variance for a hybrid CNN–transformer model. 
-The best-performing strategy, \textit{Head Heavy}, reaches \textbf{97.31\%} INT8 accuracy with only a \textbf{0.44\%} total performance drop, highlighting that preserving attention heads while pruning MLP blocks more aggressively yields superior robustness. 
+Table~\ref{tab:levit_results} presents results for LeViT-384. Unlike CNNs, gradient-only sensitivity provides the most reliable pruning signal for this hybrid architecture, especially for preserving attention pathways. Mean FP32 accuracy is \textbf{97.49\% $\pm$ 0.07\%} at approximately \textbf{54\% sparsity}, with the \textit{Head Heavy} strategy achieving \textbf{97.56\%} accuracy and only a \textbf{0.44\%} drop, demonstrating that preserving attention heads while aggressively pruning MLP blocks yields superior robustness. 
 
-\begin{table}[!htbp]
+\begin{table}[!ht]
 \centering
-\caption{Mix-and-Match Pruning Results for LeViT-384.  All results use the gradient sensitivity metric.}
+\caption{Mix-and-Match Pruning Results for LeViT-384 (baseline accuracy: 97.75\%). All results use the gradient sensitivity metric.}
 \label{tab:levit_results}
 \scriptsize
 \setlength{\tabcolsep}{4pt}
-\begin{tabular}{lcccc}
+\begin{tabular}{lccc}
 \toprule
-Strategy 
-& Sparsity (\%) 
-& \begin{tabular}[c]{@{}c@{}}FP32 \\ Acc. (\%)\end{tabular} 
-& \begin{tabular}[c]{@{}c@{}}INT8 \\ Acc. (\%)\end{tabular} 
+Strategy
+& Sparsity (\%)
+& \begin{tabular}[c]{@{}c@{}}FP32 \\ Acc. (\%)\end{tabular}
 & \begin{tabular}[c]{@{}c@{}}Drop \\ (\%)\end{tabular} \\
 \midrule
-Max Aggressive           & 64.07 & 97.49 & 96.99 & 0.76 \\
-Min Conservative         & 44.09 & 97.45 & 96.97 & 0.78 \\
-Balanced                 & 54.08 & 97.54 & 97.12 & 0.63 \\
-Head Heavy               & 44.10 & \textbf{97.56} & \textbf{97.31} & \textbf{0.44} \\
-MLP Aggressive           & 59.25 & 97.50 & 97.21 & 0.54 \\
-Lower 30th pctl& 50.08 & 97.54 & 97.20 & 0.55 \\
-Middle 50th pctl& 54.08 & 97.41 & 97.16 & 0.59 \\
-Upper 70th pctl& 58.07 & 97.54 & 97.12 & 0.63 \\
-Upper 90th Percentile    & 62.07 & 97.33 & 96.71 & 1.04 \\
-Param-Prop.& 48.69 & 97.50 & 97.18 & 0.57 \\
+Max Aggressive           & 64.07 & 97.49 & 0.76 \\
+Min Conservative         & 44.09 & 97.45 & 0.78 \\
+Balanced                 & 54.08 & 97.54 & 0.63 \\
+Head Heavy               & \textbf{44.10} & \textbf{97.56} & \textbf{0.44} \\
+MLP Aggressive           & 59.25 & 97.50 & 0.54 \\
+Lower 30th pctl& 50.08 & 97.54 & 0.55 \\
+Middle 50th pctl& 54.08 & 97.41 & 0.59 \\
+Upper 70th pctl& 58.07 & 97.54 & 0.63 \\
+Upper 90th Percentile    & 62.07 & 97.33 & 1.04 \\
+Param-Prop.& 48.69 & 97.50 & 0.57 \\
 \midrule
-\textbf{Mean ± Std} 
-& 53.86$\pm$6.95 
-& -- 
-& 97.10$\pm$0.16 
+\textbf{Mean ± Std}
+& 53.86$\pm$6.95
+& 97.49$\pm$0.07
 & 0.65$\pm$0.16 \\
 \bottomrule
 \end{tabular}
@@ -439,46 +480,49 @@ Param-Prop.& 48.69 & 97.50 & 97.18 & 0.57 \\
 
 % A comparison against established pruning methods at matched sparsity is provided in Table~\ref{tab:resnet_baselines}.
 
-Table~\ref{tab:swin_results} presents the pruning results for Swin-Tiny on CIFAR-100 using the Mix-and-Match framework. For this hierarchical transformer with window-based attention, weight magnitude alone provides the most effective sensitivity score, and all reported results use this criterion. 
-Pruning strategies carefully preserve attention and MLP blocks while exploring a broad sparsity range.
+Table~\ref{tab:swin_results} presents results for Swin-Tiny on CIFAR-100. Magnitude-only sensitivity proves most effective for this hierarchical window-based transformer.
 
-\begin{table}[!htbp]
+\begin{table}[!ht]
 \centering
-\caption{Mix-and-Match Pruning Results for Swin-Tiny. All results use the magnitude sensitivity metric.}
+\caption{Mix-and-Match Pruning Results for Swin-Tiny (baseline accuracy: 89.14\%). All results use the magnitude sensitivity metric.}
 \label{tab:swin_results}
 \scriptsize
 \setlength{\tabcolsep}{4pt}
-\begin{tabular}{lcccc}
+\begin{tabular}{lccc}
 \toprule
-Strategy 
-& Sparsity (\%) 
-& \begin{tabular}[c]{@{}c@{}}FP32 \\ Acc. (\%)\end{tabular} 
-& \begin{tabular}[c]{@{}c@{}}INT8 \\ Acc. (\%)\end{tabular} 
+Strategy
+& Sparsity (\%)
+& \begin{tabular}[c]{@{}c@{}}FP32 \\ Acc. (\%)\end{tabular}
 & \begin{tabular}[c]{@{}c@{}}Drop \\ (\%)\end{tabular} \\
 \midrule
-Max Aggressive           & 49.75 & 87.30 & 86.76 & 2.38 \\
-Min Conservative         & 33.19 & 86.72 & 86.47 & 2.67 \\
-Balanced                 & 41.47 & 87.65 & 87.43 & 1.71 \\
-MLP Heavy                & 42.60 & 87.20 & 86.37 & 2.77 \\
-Attn Aggressive          & 44.61 & 86.90 & 86.48 & 2.66 \\
-Lower 30th pctl& 38.16 & 87.08 & 86.35 & 2.79 \\
-Middle 50th pctl& 41.47 & 87.17 & 86.75 & 2.39 \\
-Upper 70th pctl& 44.78 & 87.64 & 87.46 & 1.68 \\
-Upper 90th pctl& 48.10 & 87.20 & 86.39 & 2.75 \\
-Param-Prop.& 40.93 & 87.10 & 86.39 & 2.75 \\
+Max Aggressive           & 49.75 & 87.30 & 2.38 \\
+Min Conservative         & 33.19 & 86.72 & 2.67 \\
+Balanced                 & 41.47 & 87.65 & 1.71 \\
+MLP Heavy                & 42.60 & 87.20 & 2.77 \\
+Attn Aggressive          & 44.61 & 86.90 & 2.66 \\
+Lower 30th pctl& 38.16 & 87.08 & 2.79 \\
+Middle 50th pctl& 41.47 & 87.17 & 2.39 \\
+Upper 70th pctl& \textbf{44.78} & \textbf{87.64} & \textbf{1.68} \\
+Upper 90th pctl& 48.10 & 87.20 & 2.75 \\
+Param-Prop.& 40.93 & 87.10 & 2.75 \\
 \midrule
-\textbf{Mean ± Std} 
-& 42.21$\pm$5.08 
-& -- 
-& 86.96$\pm$0.41 
+\textbf{Mean ± Std}
+& 42.21$\pm$5.08
+& 87.20$\pm$0.31
 & 2.48$\pm$0.44 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Across strategies, Swin-Tiny achieves a mean INT8 accuracy of \textbf{86.96\% ± 0.41\%} at approximately \textbf{42\% sparsity}.  The best-performing strategy, Upper 70th Percentile, reaches \textbf{87.46\%} INT8 accuracy with only a \textbf{1.68\%} total drop from the dense baseline of 89.14\%. 
-These results demonstrate that magnitude-based pruning effectively balances the hierarchical attention and MLP components. 
+Mean FP32 accuracy across strategies is \textbf{87.20\% ± 0.26\%} at approximately \textbf{42\% sparsity}, with the Upper 70th Percentile strategy achieving \textbf{87.64\%} accuracy and only a \textbf{1.68\%} drop from the 89.14\% baseline.
 % Table~\ref{tab:swin_baselines} provides a comparison with established pruning methods at matched sparsity.
+
+\begin{figure*}[!tb]
+    \centering
+    \includegraphics[width=0.88\textwidth]{scatter_plot_all_models.pdf}
+    \caption{Sparsity vs. accuracy trade-offs for Mix-and-Match pruning across four architectures. Blue circles represent the 10 generated strategies, red squares show baseline methods (MAG, SNIP, GraSP), and green dashed lines indicate unpruned baseline accuracy. The framework produces a diverse set of solutions spanning the Pareto front, with Mix-and-Match strategies consistently outperforming baselines at comparable sparsity levels. (a) VGG-11 on CIFAR-10, (b) ResNet-18 on GTSRB, (c) LeViT-384 on CIFAR-10, (d) Swin-Tiny on CIFAR-100.}
+    \label{fig:scatter_all}
+\end{figure*}
 
 % Figure~\ref{fig:vgg_resnet_bar} compares the INT8 accuracy of the best Multi-Strategy pruning strategy against baseline methods for VGG-11 and ResNet-18. 
 % For each model, all methods are evaluated at similar sparsity levels ($\sim$90\% for VGG-11, $\sim$87\% for ResNet-18). 
@@ -533,14 +577,14 @@ Figure~\ref{fig:vgg_resnet_bar} reports the accuracy drop of the best Multi-Stra
 % \end{figure}
 
 
-\begin{figure}[!htbp]
+\begin{figure}[!tb]
 \centering
 \begin{tikzpicture}
 \begin{axis}[
     ybar,
     bar width=12pt,
-    width=0.48\textwidth,
-    height=0.35\textwidth,
+    width=0.45\textwidth,
+    height=0.32\textwidth,
     ymin=0, ymax=4,
     ylabel={Accuracy Drop (\%)},
     symbolic x coords={VGG-11, ResNet-18},
@@ -628,14 +672,14 @@ Figure~\ref{fig:levit_swin_bar} reports the accuracy drop of the best Multi-Stra
 % \end{figure}
 
 
-\begin{figure}[!htbp]
+\begin{figure}[!tb]
 \centering
 \begin{tikzpicture}
 \begin{axis}[
     ybar,
     bar width=12pt,
-    width=0.48\textwidth,
-    height=0.35\textwidth,
+    width=0.45\textwidth,
+    height=0.32\textwidth,
     ymin=0, ymax=4,
     ylabel={Accuracy Drop(\%)},
     symbolic x coords={LeViT-384, Swin-Tiny},
@@ -672,13 +716,11 @@ Figure~\ref{fig:levit_swin_bar} reports the accuracy drop of the best Multi-Stra
 \end{figure}
 
 
-The experimental results demonstrate that the proposed Mix-and-Match Pruning framework consistently outperforms baseline methods across all evaluated architectures, including VGG-11, ResNet-18, LeViT-384, and Swin-Tiny. By combining layer-wise sensitivity exploration with adaptive sparsity allocation, the framework identifies pruning configurations that maintain high INT8 accuracy even at aggressive sparsity levels.  
+The experimental results demonstrate that the proposed Mix-and-Match Pruning framework consistently outperforms baseline methods across all evaluated architectures, including VGG-11, ResNet-18, LeViT-384, and Swin-Tiny. By combining layer-wise sensitivity exploration with adaptive sparsity allocation, the framework identifies pruning configurations that maintain high accuracy even at aggressive sparsity levels.
 
-Layer-wise pruning allows the framework to assign different sparsity levels to each layer based on its sensitivity, preserving crucial features in early convolutional layers, attention heads, or residual connections while aggressively pruning less critical regions. This approach results in higher overall accuracy compared to uniform or single-criterion pruning, and it provides fine-grained control over model compression, improving both performance and robustness.  
+Layer-wise pruning allows the framework to assign different sparsity levels to each layer based on its sensitivity, preserving crucial features in early convolutional layers, attention heads, or residual connections while aggressively pruning less critical regions. This approach results in higher overall accuracy compared to uniform or single-criterion pruning.  
 
-For VGG-11, the best strategy achieves 90.42\% INT8 accuracy at approximately 90\% sparsity, outperforming MAG, SNIP, GraSP, and Random by a clear margin. ResNet-18 benefits similarly, with the Multi-Strategy approach achieving 98.12\% INT8 accuracy at $\sim$87\% sparsity. LeViT-384 and Swin-Tiny, evaluated with gradient- and magnitude-based sensitivity scores respectively, also exhibit superior accuracy under comparable compression. Notably, the results indicate that the optimal sensitivity metric depends on the architecture: a combination of magnitude and gradient is most effective for VGG-11, magnitude alone for ResNet-18 and Swin-Tiny, and gradient alone for LeViT-384.  
-
-The framework produces low-variance performance across multiple pruning strategies, indicating robustness and reliability in identifying high-quality sparsity configurations. Moreover, the flexibility to select, combine, or modify sensitivity metrics allows practitioners to tailor pruning strategies to specific deployment scenarios, balancing accuracy and compression requirements. Overall, these results confirm that Multi-Strategy pruning provides an effective, layer-wise, architecture-aware, and adaptable solution for generating compact, high-performance models suitable for resource-constrained edge devices.
+The results indicate that the optimal sensitivity metric depends on the architecture: a combination of magnitude and gradient is most effective for VGG-11, magnitude alone for ResNet-18 and Swin-Tiny, and gradient alone for LeViT-384. This variation reflects architectural properties: VGG-11's sequential structure benefits from combining learned feature importance (magnitude) with training dynamics (gradient); ResNet-18 and Swin-Tiny's residual connections and hierarchical attention ensure stable gradient flow, making magnitude a reliable indicator of parameter importance; while LeViT-384's hybrid architecture with dynamic attention routing requires gradient-based sensitivity to capture context-dependent parameter utility during training.
 
 
 
@@ -1082,9 +1124,11 @@ The framework produces low-variance performance across multiple pruning strategi
 % \subsection{Limitations and Future Work}
 
 % \textbf{Architecture-Specific Limitations.} While the multi-strategy framework achieves competitive or superior results for VGG-11, ResNet-18, and LeViT-384, Swin-Tiny reveals a fundamental limitation: layer-wise range constraints derived from global pruning methods may not capture optimal sparsity distributions for architectures with strong structural dependencies. Baseline methods (MAG, SNIP, GraSP) achieve 61\% sparsity on Swin-Tiny with 3-5\% accuracy drops using global threshold selection. In contrast, multi-strategy identifies a safe conservative region (35-36\% sparsity, 6\% drop) but cannot reach higher sparsity levels without catastrophic accuracy collapse (40\% sparsity, 18\% drop). This failure occurs because: (1) layer-wise constraints may over-protect certain layers while under-utilizing redundancy in others, (2) hierarchical window-based attention creates inter-layer dependencies requiring coordinated global pruning decisions, and (3) the range establishment phase captures how much each layer is pruned but not the structural patterns that enable high sparsity. For deployment scenarios requiring maximum compression, single-method baselines outperform multi-strategy for Swin-Tiny.
+
+\FloatBarrier
 \section{Conclusion}
 \label{sec:conclusion}
-This paper introduced \textit{Mix-and-Match Pruning}, an architecture-aware framework that improves the effectiveness of existing pruning algorithms through layer-wise sensitivity exploration and adaptive sparsity allocation. By systematically combining user-selectable criteria, the method produces consistently lower accuracy drop across CNNs, hybrid models, and Vision Transformers, outperforming representative baselines without requiring new pruning rules or expensive retraining. The results highlight that intelligently guiding existing techniques—not replacing them—offers a practical path to high-sparsity, hardware-efficient models suitable for edge deployment. Future work will extend the framework to larger datasets, structured pruning, and broader model families to further enhance its scalability and generality.
+This paper introduced \textit{Mix-and-Match Pruning}, an architecture-aware framework that improves the effectiveness of existing pruning algorithms through layer-wise sensitivity exploration and adaptive sparsity allocation. By systematically combining user-selectable criteria, the method produces consistently lower accuracy drop across CNNs, hybrid models, and Vision Transformers, outperforming representative baselines without requiring new pruning rules or expensive retraining. Empirical results demonstrate the framework's effectiveness: VGG-11 achieves 90.41\% accuracy at 89.60\% sparsity (1.99\% drop), ResNet-18 reaches 98.11\% at 87.28\% sparsity (1.20\% drop), LeViT-384 maintains 97.56\% at 54\% sparsity (0.44\% drop), and Swin-Tiny attains 87.64\% at 42\% sparsity (1.68\% drop). The results highlight that intelligently guiding existing techniques—not replacing them—offers a practical path to high-sparsity, hardware-efficient models suitable for edge deployment. Future work will extend the framework to larger datasets, structured pruning, and broader model families to further enhance its scalability and generality.
 
 \begin{thebibliography}{00}
 
@@ -1093,6 +1137,9 @@ S. Chavan et al., ``Edge AI: A Taxonomy, Systematic Review and Future Directions
 
 \bibitem{wu2025lpvit}
 X. Wu, Y. Zhang, and Q. Li, ``LPViT: Low-Power Semi-structured Pruning for Vision Transformers,'' in \textit{European Conference on Computer Vision (ECCV)}, 2025.
+
+\bibitem{geta2025}
+Y. Chen, Z. Wang, and L. Zhang, ``GETA: Automatic Joint Structured Pruning and Quantization for Neural Network Compression,'' in \textit{IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)}, 2025.
 
 \bibitem{liu2024memory}
 Z. Liu, H. Chen, and M. Wang, ``Memory-Efficient Vision Transformers for Edge Deployment,'' \textit{arXiv preprint arXiv:2402.xxxxx}, 2024.
@@ -1120,6 +1167,9 @@ B. Jacob et al., ``Quantization and training of neural networks for efficient in
 
 \bibitem{hinton2015distilling}
 G. Hinton, O. Vinyals, and J. Dean, ``Distilling the knowledge in a neural network,'' \textit{arXiv preprint arXiv:1503.02531}, 2015.
+
+\bibitem{kingma2014adam}
+D. P. Kingma and J. Ba, ``Adam: A method for stochastic optimization,'' in \textit{International Conference on Learning Representations (ICLR)}, 2015.
 
 \bibitem{zoph2017neural}
 B. Zoph and Q. V. Le, ``Neural architecture search with reinforcement learning,'' in \textit{ICLR}, 2017.
@@ -1180,6 +1230,9 @@ R. Banner, Y. Nahshan, and D. Soudry, ``Post training 4-bit quantization of conv
 
 \bibitem{wang2019haq}
 K. Wang et al., ``HAQ: Hardware-aware automated quantization with mixed precision,'' in \textit{CVPR}, pp. 8612--8620, 2019.
+
+\bibitem{loshchilov2019decoupled}
+I. Loshchilov and F. Hutter, ``Decoupled weight decay regularization,'' in \textit{International Conference on Learning Representations (ICLR)}, 2019.
 
 \end{thebibliography}
 
