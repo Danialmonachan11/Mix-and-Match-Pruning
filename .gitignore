@@ -21,12 +21,14 @@ wheels/
 *.egg
 MANIFEST
 
-# PyTorch
+# PyTorch checkpoints (too large for git)
 *.pt
 *.pth
 *.ckpt
 checkpoints/
 saved_models/
+pretrained/
+models/
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -48,6 +50,7 @@ venv.bak/
 *.swo
 *~
 .DS_Store
+.claude/
 
 # Data directories
 data/
@@ -88,6 +91,7 @@ Thumbs.db
 *.snm
 *.vrb
 Mentors.tex
+mentors.tex
 
 # Temporary files
 tmp/
@@ -96,7 +100,70 @@ temp/
 *.bak
 *.swp
 
+# Backup files
+*_backup.py
+*_old.py
+*_bkp.py
+*_bkp*.py
+*_old_backup.py
+VGG_multi_Strategy_old_backup.py
+*_old.md
+README_old.md
+
 # Scores and cache
 scores/
 cache/
 .cache/
+*_scores/
+
+# Documentation drafts and temp files
+*_SUMMARY.md
+*_STATUS.md
+*_CHECKLIST.md
+*_TRACKER.md
+*_CHANGES.md
+FINAL_*.md
+REPOSITORY_READY.md
+VGG_REFACTOR_SUMMARY.md
+MINIMAL_SETUP.md
+GIT_PUSH_CHECKLIST.md
+CHANGES_SUMMARY.md
+READY_TO_PUSH.md
+
+# Presentation and draft files
+*.ppt
+*.pptx
+*.docx
+*_SLIDES.txt
+*_PRESENTATION.md
+
+# FDF annotation files
+*.fdf
+
+# Intermediate/generated figures
+scatter_*.pdf
+scatter_*.png
+*_simple.pdf
+*_simple.png
+*_combined.pdf
+*_combined.png
+scatterplot_*.pdf
+scatterplot_*.png
+Figure_1.png
+figure_1.png
+
+# Temporary Python scripts
+a.py
+check_*.py
+generate_*.py
+parse_*.py
+create_*.py
+
+# Paper and LaTeX files (not ready for push yet)
+*.tex
+paper_bkp*.tex
+paper_new_backup.tex
+*_backup.tex
+
+# Cleanup scripts
+cleanup_*.sh

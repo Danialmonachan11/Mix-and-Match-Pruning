@@ -43,15 +43,9 @@ from benchmarking.unstructured.classical.magnitude import MagnitudePruning
 from benchmarking.unstructured.classical.random import RandomPruning
 from benchmarking.unstructured.y2019.snip import SNIPPruning, GraSPPruning
 
-# Configuration
-DATA_PATH = '/scratch/monacdan/MASTERS/GENIE/DANIAL_MASTERS/VGG_manipulation/Genie/VGG11/GA_BM/GA_with_quantization/non_genetic_algorithm/multi_architecture_pruning/data/archive'
-TRAIN_FOLDER = os.path.join(DATA_PATH, 'Train')
-TEST_CSV = os.path.join(DATA_PATH, 'Test.csv')
-CHECKPOINT_PATH = '/scratch/monacdan/MASTERS/GENIE/DANIAL_MASTERS/VGG_manipulation/Genie/VGG11/GA_BM/GA_with_quantization/non_genetic_algorithm/sensitivity/road_0.9994904891304348.pth'
-SCORE_DIR = '/scratch/monacdan/MASTERS/GENIE/DANIAL_MASTERS/VGG_manipulation/Genie/VGG11/GA_BM/GA_with_quantization/non_genetic_algorithm/resnet_weight_sensitivity_score_MAG'
-DEVICE = 'cuda:0' if torch.cuda.is_available() else 'cpu'
-BATCH_SIZE = 32
-FINE_TUNE_EPOCHS = 30
+# Default Configuration (can be overridden by command-line arguments)
+DEFAULT_BATCH_SIZE = 32
+DEFAULT_FINE_TUNE_EPOCHS = 30
 SEED = 42
 
 torch.manual_seed(SEED)
@@ -79,35 +73,59 @@ class GTSRBTestRemap(Dataset):
             image = self.transform(image)
         return image, label
 
-# Data Transforms
-transform_train = transforms.Compose([
-    transforms.Resize(224),
-    transforms.RandomCrop(224, padding=4),
-    transforms.RandomHorizontalFlip(),
-    transforms.ToTensor(),
-    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-])
-transform_test = transforms.Compose([
-    transforms.Resize(224),
-    transforms.CenterCrop(224),
-    transforms.ToTensor(),
-    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-])
+def get_data_transforms():
+    """Get data transforms for GTSRB"""
+    transform_train = transforms.Compose([
+        transforms.Resize(224),
+        transforms.RandomCrop(224, padding=4),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    ])
+    transform_test = transforms.Compose([
+        transforms.Resize(224),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    ])
+    return transform_train, transform_test
 
-# Datasets and Loaders
-train_dataset = datasets.ImageFolder(TRAIN_FOLDER, transform=transform_train)
-print("ImageFolder class_to_idx mapping:", train_dataset.class_to_idx)
+def load_gtsrb_data(data_path, batch_size):
+    """Load GTSRB dataset"""
+    train_folder = os.path.join(data_path, 'Train')
+    test_csv = os.path.join(data_path, 'Test.csv')
 
-test_dataset = GTSRBTestRemap(TEST_CSV, DATA_PATH, train_dataset.class_to_idx, transform=transform_test)
-train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
-test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
+    if not os.path.exists(train_folder):
+        raise FileNotFoundError(
+            f"GTSRB Train folder not found at: {train_folder}\n"
+            f"Please download GTSRB dataset from: https://benchmark.ini.rub.de/gtsrb_dataset.html\n"
+            f"Extract to: {data_path}"
+        )
+
+    if not os.path.exists(test_csv):
+        raise FileNotFoundError(f"GTSRB Test.csv not found at: {test_csv}")
+
+    transform_train, transform_test = get_data_transforms()
+
+    train_dataset = datasets.ImageFolder(train_folder, transform=transform_train)
+    print("ImageFolder class_to_idx mapping:", train_dataset.class_to_idx)
+
+    test_dataset = GTSRBTestRemap(test_csv, data_path, train_dataset.class_to_idx, transform=transform_test)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
+
+    return train_loader, test_loader
 
 # Model Loading
-def load_model():
+def load_model(checkpoint_path, device):
+    """Load ResNet-18 model from checkpoint"""
+    if not os.path.exists(checkpoint_path):
+        raise FileNotFoundError(f"Checkpoint not found at: {checkpoint_path}")
+
     model = torchvision.models.resnet18(pretrained=False)
     model.fc = torch.nn.Linear(model.fc.in_features, 43)
-    model = model.to(DEVICE)
-    checkpoint = torch.load(CHECKPOINT_PATH, map_location=DEVICE)
+    model = model.to(device)
+    checkpoint = torch.load(checkpoint_path, map_location=device)
     model.load_state_dict(checkpoint['model_state_dict'])
     return model
 
@@ -529,6 +547,24 @@ def apply_baseline_pruning(
 
     return baseline_model, masks, fp32_accuracy, actual_sparsity
 
+def parse_args():
+    """Parse command line arguments"""
+    import argparse
+    parser = argparse.ArgumentParser(description='ResNet-18 Multi-Strategy Pruning on GTSRB')
+    parser.add_argument('--checkpoint', type=str, required=True,
+                        help='Path to pretrained ResNet-18 checkpoint (.pth file)')
+    parser.add_argument('--score_dir', type=str, required=True,
+                        help='Directory containing sensitivity scores')
+    parser.add_argument('--data_path', type=str, required=True,
+                        help='Path to GTSRB dataset directory')
+    parser.add_argument('--batch_size', type=int, default=DEFAULT_BATCH_SIZE,
+                        help=f'Batch size for training/evaluation (default: {DEFAULT_BATCH_SIZE})')
+    parser.add_argument('--epochs', type=int, default=DEFAULT_FINE_TUNE_EPOCHS,
+                        help=f'Fine-tuning epochs (default: {DEFAULT_FINE_TUNE_EPOCHS})')
+    parser.add_argument('--device', type=str, default='cuda',
+                        help='Device to use: cuda or cpu (default: cuda if available)')
+    return parser.parse_args()
+
 def main():
     print("=" * 80)
     print("ResNet-18 Multi-Strategy Pruning with PTQ")
@@ -536,13 +572,23 @@ def main():
     print("\nGenerating 10 different strategies and comparing against baselines")
     print("All methods evaluated with PTQ (Post-Training Quantization)\n")
 
+    # Parse arguments
+    args = parse_args()
+
     # Setup
-    device = DEVICE
+    if args.device == 'cuda' and torch.cuda.is_available():
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
     print(f"Device: {device}")
 
+    # Load data
+    print("\nLoading GTSRB dataset...")
+    train_loader, test_loader = load_gtsrb_data(args.data_path, args.batch_size)
+
     # Load model
-    print("\nLoading pretrained ResNet-18...")
-    base_model = load_model()
+    print(f"\nLoading pretrained ResNet-18 from: {args.checkpoint}")
+    base_model = load_model(args.checkpoint, device)
     total_params = sum(p.numel() for p in base_model.parameters())
     print(f"  Total parameters: {total_params:,}")
 
@@ -552,9 +598,16 @@ def main():
     print(f"  Baseline accuracy: {baseline_accuracy:.2f}%")
 
     # Get layer information
-    print(f"\nGetting layer information...")
-    layer_names, layer_params = get_resnet_layer_info(base_model, SCORE_DIR)
-    print_layer_sensitivity_ordering(layer_names, SCORE_DIR)
+    print(f"\nGetting layer information from: {args.score_dir}")
+    if not os.path.exists(args.score_dir):
+        raise FileNotFoundError(
+            f"Sensitivity score directory not found: {args.score_dir}\n"
+            f"Please run the sensitivity score generation first:\n"
+            f"  python resnet_sensitivity_simple.py --checkpoint {args.checkpoint} --score_dir {args.score_dir}"
+        )
+
+    layer_names, layer_params = get_resnet_layer_info(base_model, args.score_dir)
+    print_layer_sensitivity_ordering(layer_names, args.score_dir)
     print(f"Model has {len(layer_names)} prunable layers")
 
     # Compute ResNet-specific ranges
@@ -612,7 +665,7 @@ def main():
 
         # Fine-tuning
         print(f"\nFine-tuning...")
-        final_fp32_accuracy = fine_tune_model(pruned_model, masks, train_loader, test_loader, device, epochs=FINE_TUNE_EPOCHS)
+        final_fp32_accuracy = fine_tune_model(pruned_model, masks, train_loader, test_loader, device, epochs=args.epochs)
         print(f"  FP32 Accuracy (after fine-tuning): {final_fp32_accuracy:.2f}%")
 
         # Apply PTQ

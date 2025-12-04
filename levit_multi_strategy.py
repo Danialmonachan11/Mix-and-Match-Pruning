@@ -45,10 +45,8 @@ from benchmarking.unstructured.classical.random import RandomPruning
 from benchmarking.unstructured.y2019.snip import SNIPPruning, GraSPPruning
 
 # Configuration
-CHECKPOINT_PATH = '/scratch/monacdan/MASTERS/GENIE/DANIAL_MASTERS/VGG_manipulation/Genie/VGG11/GA_BM/GA_with_quantization/non_genetic_algorithm/sensitivity/best3_levit_model_cifar10.pth'
-DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-BATCH_SIZE = 32
-FINE_TUNE_EPOCHS = 30
+DEFAULT_BATCH_SIZE = 32
+DEFAULT_FINE_TUNE_EPOCHS = 30
 SEED = 42
 
 torch.manual_seed(SEED)
@@ -57,9 +55,19 @@ np.random.seed(SEED)
 random.seed(SEED)
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='LeViT Multi-Strategy Pruning')
-    parser.add_argument('--score_dir', type=str, default='levit_weight_sensitivity_score',
+    parser = argparse.ArgumentParser(description='LeViT-384 Multi-Strategy Pruning on CIFAR-10')
+    parser.add_argument('--checkpoint', type=str, required=True,
+                        help='Path to pretrained LeViT-384 checkpoint (.pth file)')
+    parser.add_argument('--score_dir', type=str, required=True,
                         help='Directory containing sensitivity scores')
+    parser.add_argument('--data_path', type=str, default='./data',
+                        help='Path to download/store CIFAR-10 dataset (default: ./data)')
+    parser.add_argument('--batch_size', type=int, default=DEFAULT_BATCH_SIZE,
+                        help=f'Batch size for training/evaluation (default: {DEFAULT_BATCH_SIZE})')
+    parser.add_argument('--epochs', type=int, default=DEFAULT_FINE_TUNE_EPOCHS,
+                        help=f'Fine-tuning epochs (default: {DEFAULT_FINE_TUNE_EPOCHS})')
+    parser.add_argument('--device', type=str, default='cuda',
+                        help='Device to use: cuda or cpu (default: cuda if available)')
     return parser.parse_args()
 
 def load_data():
@@ -320,18 +328,31 @@ def apply_ptq(model, val_loader, device):
 
 def main():
     args = parse_args()
-    
+
     print("==" * 80)
     print("LeViT-384 Multi-Strategy Pruning with PTQ")
+    print(f"Checkpoint: {args.checkpoint}")
     print(f"Score Directory: {args.score_dir}")
     print("==" * 80)
-    
+
+    # Setup device
+    if args.device == 'cuda' and torch.cuda.is_available():
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
+    print(f"Device: {device}")
+
+    # Load data
     train_loader, val_loader = load_data()
-    
-    print("\nLoading pretrained LeViT-384...")
+
+    # Load model
+    print(f"\nLoading pretrained LeViT-384 from: {args.checkpoint}")
+    if not os.path.exists(args.checkpoint):
+        raise FileNotFoundError(f"Checkpoint not found at: {args.checkpoint}")
+
     base_model = create_model('levit_384', pretrained=False)
-    
-    checkpoint = torch.load(CHECKPOINT_PATH, map_location=DEVICE)
+
+    checkpoint = torch.load(args.checkpoint, map_location=device)
     encoder_weights = {k: v for k, v in checkpoint.items() if 'head' not in k and 'dist' not in k}
     base_model.load_state_dict(encoder_weights, strict=False)
     
@@ -350,11 +371,19 @@ def main():
                 base_model.head_dist.weight.data = checkpoint['head.weight'].clone()
                 base_model.head_dist.bias.data = checkpoint['head.bias'].clone()
 
-    base_model = base_model.to(DEVICE)
-    
-    initial_acc = evaluate_model(base_model, val_loader, DEVICE)
+    base_model = base_model.to(device)
+
+    initial_acc = evaluate_model(base_model, val_loader, device)
     print(f"Initial FP32 Accuracy: {initial_acc:.2f}%")
-    
+
+    # Check score directory
+    if not os.path.exists(args.score_dir):
+        raise FileNotFoundError(
+            f"Sensitivity score directory not found: {args.score_dir}\n"
+            f"Please run the sensitivity score generation first:\n"
+            f"  python levit_sensitivity_simple.py --checkpoint {args.checkpoint} --score_dir {args.score_dir}"
+        )
+
     layer_names, layer_params = get_levit_layer_info(base_model, args.score_dir)
     layer_ranges = compute_levit_sparsity_ranges(layer_names, layer_params)
     print_levit_layer_analysis(layer_names, layer_params)
@@ -378,7 +407,7 @@ def main():
         sparsity = calculate_sparsity(model)
         print(f"  Sparsity: {sparsity:.2f}%")
         
-        ft_acc = fine_tune_model(model, masks, train_loader, val_loader, DEVICE, epochs=FINE_TUNE_EPOCHS)
+        ft_acc = fine_tune_model(model, masks, train_loader, val_loader, device, epochs=args.epochs)
         print(f"  Fine-tuned Accuracy: {ft_acc:.2f}%")
         
         model_int8 = apply_ptq(copy.deepcopy(model).cpu(), val_loader, 'cpu')

@@ -1,60 +1,89 @@
 """
-Multi-Strategy MAG/SNIP vs Baselines with PTQ
+VGG-11 Multi-Strategy Pruning with PTQ (CIFAR-10)
+Standalone version - no dependencies on core/, config/, genetic_algorithm/
 
 This script:
-1. Generates 10 different pruning strategies from MAG/SNIP-derived ranges
+1. Generates 10 different pruning strategies from architecture-aware ranges
 2. Applies pruning and fine-tuning to each strategy
 3. Applies Post-Training Quantization (PTQ) to all strategies
 4. Compares all strategies against baselines (Random, MAG, SNIP, GraSP) with PTQ
 5. Provides statistical analysis of multi-strategy performance
-
-Expected output format:
-================================================================================
-COMPARISON: Multi-Strategy vs Baselines (with PTQ)
-================================================================================
-
-Method               Sparsity     FP32 Acc     INT8 Acc     Total Drop
---------------------------------------------------------------------------------
-Multi-Strategy           92.74%      90.41%      90.41%       1.98%
-MAG+PTQ                  92.69%      90.32%      90.32%       2.07%
-SNIP+PTQ                 92.69%      89.97%      89.97%       2.42%
-GraSP+PTQ                92.69%      89.62%      89.62%       2.77%
-Random+PTQ               92.69%      10.01%      10.01%      82.39%
-
-================================================================================
-MULTI-STRATEGY STATISTICS (10 variants)
-================================================================================
-  Mean INT8 Accuracy: 90.00% ± 0.36%
-  Mean Accuracy Drop: 2.39% ± 0.36%
-  Best INT8 Accuracy: 90.41%
-  Worst INT8 Accuracy: 89.32%
 """
 
 import torch
 import torch.nn as nn
 import torch.quantization
-import copy
-import sys
-import os
+import torchvision.transforms as transforms
+from torchvision import datasets
+from torch.utils.data import DataLoader
+import timm
 import numpy as np
-import time
-from pathlib import Path
-from typing import Dict, List, Tuple
+import copy
+import csv
+import os
+from typing import List, Dict, Tuple
+import random
+import sys
 from thop import profile, clever_format
+import argparse
 
-# Add project root to path
+# Add path for benchmarking imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.models import vgg11_bn
-from core.data import get_data_loaders
-from config.model_config import ModelConfig
-from genetic_algorithm.sensitivity_driven_agents import SensitivityAwarePruningAgent
-from core.utils import calculate_sparsity, count_nonzero_parameters, get_layer_score_files_map
-from genetic_algorithm.agents import ModelPruningAgent, get_sensitivity_based_layer_ordering
+# Pruning baselines
 from benchmarking.unstructured.classical.magnitude import MagnitudePruning
 from benchmarking.unstructured.classical.random import RandomPruning
 from benchmarking.unstructured.y2019.snip import SNIPPruning, GraSPPruning
 
+# Configuration
+DEFAULT_BATCH_SIZE = 128
+DEFAULT_FINE_TUNE_EPOCHS = 20
+SEED = 42
+
+torch.manual_seed(SEED)
+torch.cuda.manual_seed_all(SEED)
+np.random.seed(SEED)
+random.seed(SEED)
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='VGG-11 Multi-Strategy Pruning on CIFAR-10')
+    parser.add_argument('--checkpoint', type=str, required=True,
+                        help='Path to pretrained VGG-11 checkpoint (.pt or .pth file)')
+    parser.add_argument('--score_dir', type=str, required=True,
+                        help='Directory containing sensitivity scores')
+    parser.add_argument('--data_path', type=str, default='./data',
+                        help='Path to download/store CIFAR-10 dataset (default: ./data)')
+    parser.add_argument('--batch_size', type=int, default=DEFAULT_BATCH_SIZE,
+                        help=f'Batch size for training/evaluation (default: {DEFAULT_BATCH_SIZE})')
+    parser.add_argument('--epochs', type=int, default=DEFAULT_FINE_TUNE_EPOCHS,
+                        help=f'Fine-tuning epochs (default: {DEFAULT_FINE_TUNE_EPOCHS})')
+    parser.add_argument('--device', type=str, default='cuda',
+                        help='Device to use: cuda or cpu (default: cuda if available)')
+    return parser.parse_args()
+
+def load_data(data_path, batch_size):
+    """Load CIFAR-10 data"""
+    print("Loading CIFAR-10 data...")
+
+    train_transform = transforms.Compose([
+        transforms.RandomCrop(32, padding=4),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
+    ])
+
+    val_transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
+    ])
+
+    train_dataset = datasets.CIFAR10(root=data_path, train=True, download=True, transform=train_transform)
+    val_dataset = datasets.CIFAR10(root=data_path, train=False, download=True, transform=val_transform)
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
+
+    return train_loader, val_loader
 
 def evaluate_model(model, dataloader, device):
     """Evaluate model accuracy"""
@@ -73,27 +102,167 @@ def evaluate_model(model, dataloader, device):
     accuracy = 100.0 * correct / total
     return accuracy
 
+def calculate_sparsity(model):
+    """Calculate overall model sparsity"""
+    total_params = 0
+    zero_params = 0
 
-def get_model_size_mb(model):
-    """Calculate model size in MB"""
-    torch.save(model.state_dict(), "temp_model.pth")
-    size_mb = os.path.getsize("temp_model.pth") / (1024 * 1024)
-    os.remove("temp_model.pth")
-    return size_mb
+    for name, param in model.named_parameters():
+        if 'weight' in name:
+            total_params += param.numel()
+            zero_params += (param == 0).sum().item()
 
-def calculate_flops(model, input_size=(1, 3, 32, 32), device='cpu'):
-    """Calculate FLOPs for a model"""
-    model_copy = copy.deepcopy(model).to(device)
-    model_copy.eval()
-    input_tensor = torch.randn(input_size).to(device)
-    
-    try:
-        flops, params = profile(model_copy, inputs=(input_tensor,), verbose=False)
-        flops_str, params_str = clever_format([flops, params], "%.2f")
-        return flops, flops_str
-    except Exception as e:
-        print(f"  Warning: FLOPs calculation failed: {e}")
-        return 0, "N/A"
+    return 100.0 * zero_params / total_params if total_params > 0 else 0.0
+
+def get_layer_info(model, score_dir_path: str) -> Tuple[List[str], Dict[str, int]]:
+    """Get prunable layer names and parameter counts (sensitivity-ordered)"""
+    model_state_dict = model.state_dict()
+    layer_params = {}
+
+    # Get all prunable layers (conv and fc layers)
+    available_layers = [
+        name for name in model_state_dict.keys()
+        if 'weight' in name and 'bias' not in name and len(model_state_dict[name].shape) >= 2
+    ]
+
+    # Filter to only layers that have score files
+    layer_names_with_scores = []
+    for name in available_layers:
+        score_file = os.path.join(score_dir_path, f'weight_sensitivity_scores_{name}.csv')
+        if os.path.exists(score_file):
+            layer_names_with_scores.append(name)
+
+    # Order by average sensitivity (ascending = least sensitive first = prune more)
+    avg_sensitivities = []
+    for name in layer_names_with_scores:
+        score_file = os.path.join(score_dir_path, f'weight_sensitivity_scores_{name}.csv')
+        try:
+            scores = []
+            with open(score_file, 'r') as f:
+                next(f)  # Skip header
+                for line_idx, line in enumerate(f):
+                    if line_idx >= 1000:  # Sample first 1000
+                        break
+                    parts = line.strip().split(',')
+                    if len(parts) >= 2:
+                        scores.append(float(parts[1]))
+
+            if len(scores) > 0:
+                avg_score = np.mean(scores)
+                avg_sensitivities.append((name, avg_score))
+            else:
+                avg_sensitivities.append((name, 0.0))
+        except Exception as e:
+            print(f"    WARNING: Error reading {name}: {e}")
+            avg_sensitivities.append((name, 0.0))
+
+    # Sort by sensitivity (ascending)
+    avg_sensitivities.sort(key=lambda x: x[1])
+    layer_names = [name for name, _ in avg_sensitivities]
+
+    # Get parameter counts
+    for name in layer_names:
+        layer_params[name] = model_state_dict[name].numel()
+
+    return layer_names, layer_params
+
+def compute_vgg_sparsity_ranges(layer_names: List[str], layer_params: Dict[str, int]) -> Dict[str, Tuple[float, float]]:
+    """Compute layer pruning ranges using VGG architecture-aware rules"""
+    layer_ranges = {}
+
+    for layer_name in layer_names:
+        param_count = layer_params.get(layer_name, 0)
+
+        # Rule 1: Batch norm layers (if any) - no pruning
+        is_batchnorm = (
+            any(x in layer_name.lower() for x in ['bn', 'batchnorm', 'norm']) or
+            (param_count <= 2048 and param_count in [64, 128, 256, 512, 1024, 2048])
+        )
+        if is_batchnorm:
+            layer_ranges[layer_name] = (0.0, 0.0)
+            continue
+
+        # Rule 2: Small layers (< 10K parameters) - conservative
+        if param_count < 10000:
+            layer_ranges[layer_name] = (10.0, 40.0)
+            continue
+
+        # Rule 3: Classifier/FC layers - conservative (important for final decision)
+        is_fc = any(x in layer_name.lower() for x in ['fc', 'classifier', 'linear', 'head'])
+        if is_fc:
+            layer_ranges[layer_name] = (30.0, 70.0)
+            continue
+
+        # Rule 4: Conv layers - aggressive
+        is_conv = 'features' in layer_name.lower() or 'conv' in layer_name.lower()
+        if is_conv:
+            # Early layers (smaller param count) - more conservative
+            if param_count < 100000:
+                layer_ranges[layer_name] = (40.0, 80.0)
+            # Middle layers
+            elif param_count < 500000:
+                layer_ranges[layer_name] = (50.0, 85.0)
+            # Deep layers (larger param count) - most aggressive
+            else:
+                layer_ranges[layer_name] = (60.0, 90.0)
+        else:
+            # Default for any other layer type
+            layer_ranges[layer_name] = (20.0, 60.0)
+
+    return layer_ranges
+
+def apply_pruning_mask(model, strategy, layer_names, layer_params, score_dir, debug=False):
+    """Apply pruning based on sensitivity scores"""
+    masks = {}
+
+    for layer_idx, layer_name in enumerate(layer_names):
+        prune_pct = strategy[layer_idx]
+
+        if prune_pct <= 0.0:
+            param_tensor = dict(model.named_parameters())[layer_name]
+            masks[layer_name] = torch.ones_like(param_tensor)
+            continue
+
+        score_file = os.path.join(score_dir, f'weight_sensitivity_scores_{layer_name}.csv')
+        if not os.path.exists(score_file):
+            param_tensor = dict(model.named_parameters())[layer_name]
+            masks[layer_name] = torch.ones_like(param_tensor)
+            continue
+
+        # Read sensitivity scores
+        total_weights = layer_params[layer_name]
+        scores = []
+        with open(score_file, 'r') as f:
+            next(f)  # Skip header
+            for line in f:
+                parts = line.strip().split(',')
+                if len(parts) >= 2:
+                    idx = int(parts[0])
+                    score = float(parts[1])
+                    if idx < total_weights:
+                        scores.append((idx, score))
+
+        # Sort by sensitivity (ascending = prune least sensitive first)
+        scores.sort(key=lambda x: x[1])
+        num_to_prune = int(total_weights * (prune_pct / 100.0))
+
+        # Create mask
+        mask = torch.ones(total_weights)
+        for i in range(min(num_to_prune, len(scores))):
+            idx = scores[i][0]
+            if idx < total_weights:
+                mask[idx] = 0
+
+        # Apply mask
+        param_tensor = dict(model.named_parameters())[layer_name]
+        mask = mask.view(param_tensor.shape).to(param_tensor.device)
+
+        with torch.no_grad():
+            param_tensor.mul_(mask)
+
+        masks[layer_name] = mask
+
+    return masks
 
 def fine_tune_model(model, masks, train_loader, val_loader, device, epochs=20):
     """Fine-tune pruned model with early stopping"""
@@ -106,10 +275,10 @@ def fine_tune_model(model, masks, train_loader, val_loader, device, epochs=20):
     best_model_state = None
 
     for epoch in range(epochs):
-        # Training
         model.train()
         for batch_idx, (data, target) in enumerate(train_loader):
             data, target = data.to(device), target.to(device)
+
             optimizer.zero_grad()
             output = model(data)
             loss = criterion(output, target)
@@ -135,9 +304,8 @@ def fine_tune_model(model, masks, train_loader, val_loader, device, epochs=20):
             patience_counter = 0
         else:
             patience_counter += 1
-
-        if patience_counter >= patience:
-            break
+            if patience_counter >= patience:
+                break
 
     # Restore best model
     if best_model_state is not None:
@@ -145,137 +313,14 @@ def fine_tune_model(model, masks, train_loader, val_loader, device, epochs=20):
 
     return best_accuracy
 
-
-def get_layer_info(model, score_dir_path: str) -> Tuple[List[str], Dict[str, int]]:
-    """Get prunable layer names and parameter counts (sensitivity-ordered)"""
-    model_state_dict = model.state_dict()
-    layer_params = {}
-
-    # Get all prunable layers
-    available_layers = [
-        name for name in model_state_dict.keys()
-        if ('features' in name or 'classifier' in name) and 'weight' in name
-    ]
-
-    # Filter to only layers that have score files
-    layer_score_files = get_layer_score_files_map(score_dir_path, model_state_dict)
-    available_layers = [name for name in available_layers if name in layer_score_files]
-
-    # Use SAME sensitivity-based ordering as agent
-    layer_names = get_sensitivity_based_layer_ordering(available_layers, score_dir_path)
-
-    # Get parameter counts
-    for name in layer_names:
-        layer_params[name] = model_state_dict[name].numel()
-
-    return layer_names, layer_params
-
-
-def compute_mag_snip_derived_ranges(layer_names: List[str], layer_params: Dict[str, int]) -> Dict[str, Tuple[float, float]]:
-    """Compute layer pruning ranges using MAG/SNIP observations"""
-    layer_ranges = {}
-
-    # Separate layers by type
-    fc_layers = []
-    conv_layers = []
-
-    for layer_name in layer_names:
-        is_fc = any(x in layer_name.lower() for x in ['fc', 'classifier', 'linear', 'head'])
-        if is_fc:
-            fc_layers.append(layer_name)
-        else:
-            conv_layers.append(layer_name)
-
-    # RULE 1: BatchNorm protection
-    for layer_name in layer_names:
-        param_count = layer_params.get(layer_name, 0)
-        is_batchnorm = (
-            any(x in layer_name.lower() for x in ['bn', 'batchnorm', 'norm', 'downsample.1']) or
-            (param_count <= 2048 and param_count in [64, 128, 256, 512, 1024, 2048])
-        )
-        if is_batchnorm:
-            layer_ranges[layer_name] = (0.0, 0.0)
-            continue
-
-    # RULE 2: Small layers
-    for layer_name in layer_names:
-        if layer_name in layer_ranges:
-            continue
-        param_count = layer_params.get(layer_name, 0)
-        if param_count < 10000 and param_count > 0:
-            layer_ranges[layer_name] = (0.0, 10.0)
-            continue
-
-    # RULE 3: FC/Classifier layers
-    fc_layer_sizes = [(name, layer_params[name]) for name in fc_layers]
-    fc_layer_sizes.sort(key=lambda x: x[1], reverse=True)
-
-    for fc_rank, (layer_name, _) in enumerate(fc_layer_sizes):
-        if fc_rank == 0:
-            layer_ranges[layer_name] = (92.0, 98.0)
-        elif fc_rank == 1:
-            layer_ranges[layer_name] = (88.0, 96.0)
-        else:
-            layer_ranges[layer_name] = (85.0, 95.0)
-
-    # RULE 4: Conv layers
-    def extract_layer_number(layer_name):
-        try:
-            if 'features' in layer_name:
-                parts = layer_name.split('.')
-                return int(parts[1])
-            return 999
-        except:
-            return 999
-
-    actual_conv_layers = [l for l in conv_layers if l not in layer_ranges]
-    actual_conv_layers_sorted = sorted(actual_conv_layers, key=extract_layer_number)
-
-    for conv_position, layer_name in enumerate(actual_conv_layers_sorted):
-        total_conv_layers = len(actual_conv_layers_sorted)
-        relative_position = conv_position / max(total_conv_layers - 1, 1)
-
-        if relative_position < 0.4:
-            layer_ranges[layer_name] = (40.0, 60.0)
-        elif relative_position < 0.6:
-            layer_ranges[layer_name] = (55.0, 70.0)
-        elif relative_position < 0.8:
-            layer_ranges[layer_name] = (65.0, 80.0)
-        else:
-            layer_ranges[layer_name] = (75.0, 92.0)
-
-    # Fallback
-    for layer_name in conv_layers:
-        if layer_name not in layer_ranges:
-            layer_ranges[layer_name] = (40.0, 70.0)
-
-    return layer_ranges
-
-
 def create_strategy_variant(
     layer_names: List[str],
     layer_params: Dict[str, int],
     layer_ranges: Dict[str, Tuple[float, float]],
     strategy_type: str,
-    target_sparsity: float = 90.0
+    target_sparsity: float = None
 ) -> Tuple[List[float], str]:
-    """
-    Create a pruning strategy by sampling from layer ranges.
-
-    Strategy types:
-    1. "max_aggressive" - Start at MAX of each range
-    2. "min_conservative" - Start at MIN of each range
-    3. "balanced" - Start at MIDDLE of each range
-    4. "classifier_heavy" - Max classifiers, min convs
-    5. "conv_aggressive" - Max convs, balanced classifiers
-    6. "lower_30th_percentile" - 30% position from min (conservative side)
-    7. "middle_50th_percentile" - 50% position (median)
-    8. "upper_70th_percentile" - 70% position from min (aggressive side)
-    9. "upper_90th_percentile" - 90% position near max (very aggressive)
-    10. "graduated" - Proportional to layer size
-    """
-
-    total_params = sum(layer_params.values())
+    """Create a pruning strategy by sampling from layer ranges."""
     strategy = []
 
     for layer_name in layer_names:
@@ -284,511 +329,245 @@ def create_strategy_variant(
         else:
             min_range, max_range = 0.0, 10.0
 
-        is_fc = any(x in layer_name.lower() for x in ['fc', 'classifier', 'linear'])
-
         if strategy_type == "max_aggressive":
             prune_pct = max_range
-
         elif strategy_type == "min_conservative":
             prune_pct = min_range
-
         elif strategy_type == "balanced":
             prune_pct = (min_range + max_range) / 2.0
-
-        elif strategy_type == "classifier_heavy":
-            if is_fc:
-                prune_pct = max_range
-            else:
-                prune_pct = min_range
-
-        elif strategy_type == "conv_aggressive":
-            if is_fc:
-                prune_pct = (min_range + max_range) / 2.0
-            else:
-                prune_pct = max_range
-
+        elif strategy_type == "random":
+            prune_pct = np.random.uniform(min_range, max_range)
         elif strategy_type == "lower_30th_percentile":
             prune_pct = min_range + (max_range - min_range) * 0.3
-
         elif strategy_type == "middle_50th_percentile":
             prune_pct = min_range + (max_range - min_range) * 0.5
-
         elif strategy_type == "upper_70th_percentile":
             prune_pct = min_range + (max_range - min_range) * 0.7
-
         elif strategy_type == "upper_90th_percentile":
             prune_pct = min_range + (max_range - min_range) * 0.9
-
-        elif strategy_type == "graduated":
-            layer_size_ratio = layer_params[layer_name] / total_params
-            ratio = min(1.0, layer_size_ratio * 10)
-            prune_pct = min_range + (max_range - min_range) * ratio
-
         else:
             prune_pct = max_range
 
         strategy.append(prune_pct)
 
-    # Adjust to hit target sparsity
-    strategy = adjust_to_target_sparsity(
-        strategy, layer_names, layer_params, total_params, target_sparsity
-    )
+    description = f"{strategy_type}"
+    if target_sparsity:
+        description += f" (target: {target_sparsity:.1f}%)"
 
-    description = f"{strategy_type} targeting {target_sparsity:.1f}%"
     return strategy, description
 
+def apply_ptq(model, val_loader, device):
+    """Apply Post-Training Quantization (PTQ)"""
+    model.eval()
+    model.qconfig = torch.quantization.get_default_qconfig('fbgemm')
+    torch.quantization.prepare(model, inplace=True)
 
-def adjust_to_target_sparsity(
-    strategy: List[float],
-    layer_names: List[str],
-    layer_params: Dict[str, int],
-    total_params: int,
-    target_sparsity: float,
-    max_iterations: int = 30
-) -> List[float]:
-    """Iteratively adjust strategy to hit target sparsity"""
+    # Calibrate with validation data
+    with torch.no_grad():
+        for i, (data, _) in enumerate(val_loader):
+            if i >= 10:  # Use 10 batches for calibration
+                break
+            model(data.to(device))
 
-    target_pruned = total_params * (target_sparsity / 100.0)
-    adjustment_rate = 0.2
-
-    for iteration in range(max_iterations):
-        # Calculate current sparsity
-        current_pruned = sum(
-            (strategy[i] / 100.0) * layer_params[layer_names[i]]
-            for i in range(len(layer_names))
-        )
-        current_sparsity = (current_pruned / total_params) * 100.0
-        error = target_pruned - current_pruned
-        error_pct = abs((current_sparsity - target_sparsity) / target_sparsity) * 100.0
-
-        if error_pct < 0.5:  # Within 0.5%
-            break
-
-        # Adjust all layers proportionally
-        for i in range(len(strategy)):
-            if error > 0:  # Need MORE pruning
-                strategy[i] = min(98.0, strategy[i] + adjustment_rate)
-            else:  # Need LESS pruning
-                strategy[i] = max(0.0, strategy[i] - adjustment_rate)
-
-    return strategy
-
-
-def apply_baseline_pruning(
-    baseline_name: str,
-    base_model,
-    model_path: str,
-    target_sparsity: float,
-    train_loader,
-    val_loader,
-    device
-):
-    """
-    Apply baseline pruning method (MAG, SNIP, GraSP, or Random) and fine-tune
-
-    Returns: (pruned_model, masks, fp32_accuracy, sparsity)
-    """
-    print(f"\nApplying {baseline_name} pruning at {target_sparsity:.2f}% sparsity...")
-
-    # Load fresh model
-    baseline_model = vgg11_bn(pretrained=False)
-    baseline_model.load_state_dict(torch.load(model_path, map_location=device))
-    baseline_model = baseline_model.to(device)
-
-    # Apply pruning method
-    if baseline_name == "MAG":
-        pruner = MagnitudePruning()
-        baseline_model, masks = pruner.prune_model(baseline_model, target_sparsity, global_pruning=True)
-
-    elif baseline_name == "SNIP":
-        pruner = SNIPPruning(num_samples=1)
-        scores = pruner.compute_snip_scores(baseline_model, train_loader, device)
-        masks = pruner.get_snip_pruning_mask(scores, target_sparsity / 100.0, global_pruning=True)
-
-        # Apply masks
-        with torch.no_grad():
-            for name, mask in masks.items():
-                param_dict = dict(baseline_model.named_parameters())
-                if name in param_dict:
-                    param_dict[name].data.mul_(mask.to(device))
-
-    elif baseline_name == "GraSP":
-        pruner = GraSPPruning(num_samples=1)
-        scores = pruner.compute_grasp_scores(baseline_model, train_loader, device)
-        masks = pruner.get_grasp_pruning_mask(scores, target_sparsity / 100.0, global_pruning=True)
-
-        # Apply masks
-        with torch.no_grad():
-            for name, mask in masks.items():
-                param_dict = dict(baseline_model.named_parameters())
-                if name in param_dict:
-                    param_dict[name].data.mul_(mask.to(device))
-
-    elif baseline_name == "Random":
-        pruner = RandomPruning(seed=42)
-        masks = pruner.get_random_pruning_mask(baseline_model, target_sparsity / 100.0, global_pruning=True)
-
-        # Apply masks
-        with torch.no_grad():
-            for name, mask in masks.items():
-                param_dict = dict(baseline_model.named_parameters())
-                if name in param_dict:
-                    param_dict[name].data.mul_(mask.to(device))
-    else:
-        raise ValueError(f"Unknown baseline: {baseline_name}")
-
-    actual_sparsity = calculate_sparsity(baseline_model)
-    print(f"  {baseline_name} sparsity achieved: {actual_sparsity:.2f}%")
-
-    # Evaluate before fine-tuning
-    fp32_accuracy_initial = evaluate_model(baseline_model, val_loader, device)
-    print(f"  {baseline_name} FP32 accuracy (before fine-tuning): {fp32_accuracy_initial:.2f}%")
-
-    # Fine-tune (same parameters as multi-strategy)
-    print(f"  Fine-tuning {baseline_name} model for 20 epochs...")
-    optimizer = torch.optim.Adam(baseline_model.parameters(), lr=1e-4)
-    criterion = nn.CrossEntropyLoss()
-
-    best_accuracy = 0.0
-    patience_counter = 0
-    patience = 3
-    best_model_state = None
-
-    for epoch in range(20):
-        # Training
-        baseline_model.train()
-        for batch_idx, (data, target) in enumerate(train_loader):
-            data, target = data.to(device), target.to(device)
-            optimizer.zero_grad()
-            output = baseline_model(data)
-            loss = criterion(output, target)
-            loss.backward()
-
-            # Enforce sparsity
-            with torch.no_grad():
-                for name, param in baseline_model.named_parameters():
-                    if name in masks:
-                        mask = masks[name]
-                        if mask.numel() == param.numel():
-                            param.data.mul_(mask.view(param.shape).to(param.device))
-
-            optimizer.step()
-
-        # Validation
-        baseline_model.eval()
-        val_accuracy = evaluate_model(baseline_model, val_loader, device)
-
-        if val_accuracy > best_accuracy:
-            best_accuracy = val_accuracy
-            best_model_state = baseline_model.state_dict().copy()
-            patience_counter = 0
-        else:
-            patience_counter += 1
-
-        if patience_counter >= patience:
-            break
-
-    # Restore best model
-    if best_model_state is not None:
-        baseline_model.load_state_dict(best_model_state)
-
-    # Final evaluation
-    fp32_accuracy = evaluate_model(baseline_model, val_loader, device)
-    improvement = fp32_accuracy - fp32_accuracy_initial
-    print(f"  {baseline_name} FP32 accuracy (after fine-tuning): {fp32_accuracy:.2f}% (+{improvement:.2f}%)")
-
-    return baseline_model, masks, fp32_accuracy, actual_sparsity
-
+    torch.quantization.convert(model, inplace=True)
+    return model
 
 def main():
-    print("=" * 80)
-    print("Multi-Strategy MAG/SNIP vs Baselines with PTQ")
-    print("=" * 80)
-    print("\nGenerating 10 different strategies and comparing against baselines")
-    print("All methods evaluated with PTQ (Post-Training Quantization)\n")
+    args = parse_args()
 
-    # Setup
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("=" * 80)
+    print("VGG-11 Multi-Strategy Pruning with PTQ (CIFAR-10)")
+    print(f"Checkpoint: {args.checkpoint}")
+    print(f"Score Directory: {args.score_dir}")
+    print("=" * 80)
+
+    # Setup device
+    if args.device == 'cuda' and torch.cuda.is_available():
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
     print(f"Device: {device}")
 
     # Load data
-    print("\nLoading CIFAR-10 dataset...")
-    model_config = ModelConfig()
-    train_loader, val_loader = get_data_loaders(model_config)
+    train_loader, val_loader = load_data(args.data_path, args.batch_size)
 
-    # Load pretrained model
-    print("\nLoading pretrained VGG-11...")
-    model_path = "/scratch/monacdan/MASTERS/GENIE/DANIAL_MASTERS/VGG_manipulation/Genie/VGG11/vgg11_bn.pt"
+    # Load model
+    print(f"\nLoading pretrained VGG-11 from: {args.checkpoint}")
+    if not os.path.exists(args.checkpoint):
+        raise FileNotFoundError(
+            f"Checkpoint not found at: {args.checkpoint}\n"
+            f"Please provide a pretrained VGG-11 checkpoint.\n"
+            f"You can:\n"
+            f"  1. Train your own VGG-11 on CIFAR-10\n"
+            f"  2. Use timm pretrained: python -c 'import timm; m=timm.create_model(\"vgg11_bn\", pretrained=True, num_classes=10); import torch; torch.save(m.state_dict(), \"{args.checkpoint}\")'"
+        )
 
-    base_model = vgg11_bn(pretrained=False)
-    base_model.load_state_dict(torch.load(model_path, map_location=device))
+    # Create model
+    base_model = timm.create_model('vgg11_bn', pretrained=False, num_classes=10)
+
+    # Load checkpoint
+    checkpoint = torch.load(args.checkpoint, map_location=device)
+
+    # Handle different checkpoint formats
+    if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+        state_dict = checkpoint['state_dict']
+    elif isinstance(checkpoint, dict) and 'model' in checkpoint:
+        state_dict = checkpoint['model']
+    else:
+        state_dict = checkpoint
+
+    base_model.load_state_dict(state_dict, strict=False)
     base_model = base_model.to(device)
-    base_model.eval()
 
-    total_params = sum(p.numel() for p in base_model.parameters())
-    print(f"  Total parameters: {total_params:,}")
+    initial_acc = evaluate_model(base_model, val_loader, device)
+    print(f"Initial FP32 Accuracy: {initial_acc:.2f}%")
 
-    # Baseline accuracy
-    baseline_accuracy = evaluate_model(base_model, val_loader, device)
-    print(f"  Baseline accuracy: {baseline_accuracy:.2f}%")
-
-    # Score directory
-    score_dir = "/scratch/monacdan/MASTERS/GENIE/DANIAL_MASTERS/VGG_manipulation/Genie/VGG11/vgg_weight_grades/vgg_weight_sensitivity_score"
+    # Check score directory
+    if not os.path.exists(args.score_dir):
+        raise FileNotFoundError(
+            f"Sensitivity score directory not found: {args.score_dir}\n"
+            f"Please run the sensitivity score generation first:\n"
+            f"  python vgg_sensitivity_simple.py --checkpoint {args.checkpoint} --score_dir {args.score_dir}"
+        )
 
     # Get layer information
-    print(f"\nGetting layer information...")
-    layer_names, layer_params = get_layer_info(base_model, score_dir)
-    print(f"Model has {len(layer_names)} prunable layers")
+    layer_names, layer_params = get_layer_info(base_model, args.score_dir)
+    layer_ranges = compute_vgg_sparsity_ranges(layer_names, layer_params)
 
-    # Compute MAG/SNIP-derived ranges
-    print(f"\nComputing MAG/SNIP-derived layer ranges...")
-    layer_ranges = compute_mag_snip_derived_ranges(layer_names, layer_params)
+    print(f"\nFound {len(layer_names)} prunable layers with sensitivity scores")
 
-    # ========================================================================
-    # PART 1: Generate and Evaluate 10 Multi-Strategies with PTQ
-    # ========================================================================
-    print("\n" + "=" * 80)
-    print("PART 1: Generating and Evaluating 10 Multi-Strategies with PTQ")
-    print("=" * 80)
-
+    # Define strategies to test
     strategy_types = [
-        ("max_aggressive", 90.0),
-        ("min_conservative", 90.0),
-        ("balanced", 90.0),
-        ("classifier_heavy", 90.0),
-        ("conv_aggressive", 88.0),
-        ("lower_30th_percentile", 90.0),
-        ("middle_50th_percentile", 90.0),
-        ("upper_70th_percentile", 92.0),
-        ("upper_90th_percentile", 92.0),
-        ("graduated", 90.0),
+        "max_aggressive", "min_conservative", "balanced",
+        "lower_30th_percentile", "middle_50th_percentile",
+        "upper_70th_percentile", "upper_90th_percentile",
+        "random", "random", "random"  # 3 random variants for diversity
     ]
 
-    multi_strategy_results = []
+    results = []
 
-    for strategy_id, (strategy_type, target_sparsity) in enumerate(strategy_types, 1):
-        print(f"\n{'='*80}")
-        print(f"Strategy {strategy_id}/10: {strategy_type} (target: {target_sparsity:.1f}%)")
-        print(f"{'='*80}")
+    print("\n" + "=" * 80)
+    print("MULTI-STRATEGY PRUNING EVALUATION")
+    print("=" * 80)
+
+    for idx, strategy_type in enumerate(strategy_types, 1):
+        print(f"\nStrategy {idx}/{len(strategy_types)}: {strategy_type}")
 
         # Create strategy
-        strategy, description = create_strategy_variant(
-            layer_names, layer_params, layer_ranges, strategy_type, target_sparsity
-        )
+        strategy, desc = create_strategy_variant(layer_names, layer_params, layer_ranges, strategy_type)
+
+        # Create a fresh model copy
+        model = copy.deepcopy(base_model)
 
         # Apply pruning
-        strategy_agent = SensitivityAwarePruningAgent(
-            strategy_params=strategy,
-            model_state_dict=base_model.state_dict(),
-            score_dir_path=score_dir,
-            base_model=base_model
-        )
+        masks = apply_pruning_mask(model, strategy, layer_names, layer_params, args.score_dir)
 
-        masks = strategy_agent.generate_pruning_mask(device=device)
-        model_pruner = ModelPruningAgent()
-        pruned_model = model_pruner.prune_model(copy.deepcopy(base_model), masks)
-        pruned_model = pruned_model.to(device)
-
-        actual_sparsity = calculate_sparsity(pruned_model)
-
-        # Calculate FLOPs
-        flops, flops_str = calculate_flops(pruned_model, input_size=(1, 3, 32, 32), device='cpu')
-        print(f"  FLOPs: {flops_str}")
+        # Calculate sparsity
+        sparsity = calculate_sparsity(model)
+        print(f"  Sparsity: {sparsity:.2f}%")
 
         # Fine-tune
-        print(f"\nFine-tuning...")
-        final_fp32_accuracy = fine_tune_model(pruned_model, masks, train_loader, val_loader, device, epochs=20)
-
-        print(f"  FP32 Accuracy (after fine-tuning): {final_fp32_accuracy:.2f}%")
-        print(f"  Sparsity: {actual_sparsity:.2f}%")
+        ft_acc = fine_tune_model(model, masks, train_loader, val_loader, device, epochs=args.epochs)
+        print(f"  Fine-tuned FP32 Accuracy: {ft_acc:.2f}%")
 
         # Apply PTQ
-        print(f"\nApplying Post-Training Quantization...")
-        pruned_model_cpu = pruned_model.cpu()
-        quantized_model = torch.quantization.quantize_dynamic(
-            pruned_model_cpu,
-            {torch.nn.Linear, torch.nn.Conv2d},
-            dtype=torch.qint8
-        )
+        model_int8 = apply_ptq(copy.deepcopy(model).cpu(), val_loader, 'cpu')
+        int8_acc = evaluate_model(model_int8, val_loader, 'cpu')
+        print(f"  INT8 Accuracy: {int8_acc:.2f}%")
 
-        # Evaluate quantized model
-        int8_accuracy = evaluate_model(quantized_model, val_loader, 'cpu')
-        total_drop = baseline_accuracy - int8_accuracy
-        quantization_drop = final_fp32_accuracy - int8_accuracy
-
-        print(f"  INT8 Accuracy: {int8_accuracy:.2f}%")
-        print(f"  Total accuracy drop: {total_drop:.2f}%")
-
-        # Store results
-        multi_strategy_results.append({
-            'strategy_id': strategy_id,
-            'type': strategy_type,
-            'target_sparsity': target_sparsity,
-            'actual_sparsity': actual_sparsity,
-            'flops': flops,
-            'flops_str': flops_str,
-            'fp32_accuracy': final_fp32_accuracy,
-            'int8_accuracy': int8_accuracy,
-            'total_drop': total_drop,
-            'quantization_drop': quantization_drop
+        results.append({
+            'strategy': desc,
+            'sparsity': sparsity,
+            'ft_acc': ft_acc,
+            'int8_acc': int8_acc,
+            'drop': initial_acc - int8_acc
         })
 
-    # ========================================================================
-    # PART 2: Evaluate Baselines with PTQ
-    # ========================================================================
+    # Baseline comparisons
     print("\n" + "=" * 80)
-    print("PART 2: Evaluating Baselines with PTQ")
+    print("BASELINE COMPARISON (with PTQ)")
     print("=" * 80)
 
-    # Use the mean sparsity from multi-strategies for fair comparison
-    mean_sparsity = np.mean([r['actual_sparsity'] for r in multi_strategy_results])
-    print(f"\nUsing mean sparsity from multi-strategies: {mean_sparsity:.2f}%")
+    # Target sparsity for baselines (use mean of multi-strategy)
+    target_sparsity = np.mean([r['sparsity'] for r in results])
+    print(f"\nTarget sparsity for baselines: {target_sparsity:.2f}%")
 
-    baseline_results = {}
+    baseline_results = []
 
-    # Evaluate each baseline
-    for baseline_name in ["MAG", "SNIP", "GraSP", "Random"]:
-        baseline_model, baseline_masks, fp32_acc, actual_spar = apply_baseline_pruning(
-            baseline_name, base_model, model_path, mean_sparsity,
-            train_loader, val_loader, device
-        )
+    # Random Pruning
+    print("\nBaseline 1: Random Pruning")
+    model = copy.deepcopy(base_model)
+    random_pruner = RandomPruning(model, train_loader, val_loader, device)
+    model = random_pruner.prune(target_sparsity / 100.0)
+    sparsity = calculate_sparsity(model)
+    fp32_acc = evaluate_model(model, val_loader, device)
+    model_int8 = apply_ptq(copy.deepcopy(model).cpu(), val_loader, 'cpu')
+    int8_acc = evaluate_model(model_int8, val_loader, 'cpu')
+    print(f"  Sparsity: {sparsity:.2f}% | FP32: {fp32_acc:.2f}% | INT8: {int8_acc:.2f}%")
+    baseline_results.append({'name': 'Random', 'sparsity': sparsity, 'fp32': fp32_acc, 'int8': int8_acc})
 
-        # Calculate FLOPs
-        flops, flops_str = calculate_flops(baseline_model, input_size=(1, 3, 32, 32), device='cpu')
-        print(f"  {baseline_name} FLOPs: {flops_str}")
+    # Magnitude Pruning
+    print("\nBaseline 2: Magnitude Pruning")
+    model = copy.deepcopy(base_model)
+    mag_pruner = MagnitudePruning(model, train_loader, val_loader, device)
+    model = mag_pruner.prune(target_sparsity / 100.0)
+    sparsity = calculate_sparsity(model)
+    fp32_acc = evaluate_model(model, val_loader, device)
+    model_int8 = apply_ptq(copy.deepcopy(model).cpu(), val_loader, 'cpu')
+    int8_acc = evaluate_model(model_int8, val_loader, 'cpu')
+    print(f"  Sparsity: {sparsity:.2f}% | FP32: {fp32_acc:.2f}% | INT8: {int8_acc:.2f}%")
+    baseline_results.append({'name': 'MAG', 'sparsity': sparsity, 'fp32': fp32_acc, 'int8': int8_acc})
 
-        # Apply PTQ to baseline
-        print(f"\n  Applying PTQ to {baseline_name}...")
-        baseline_model_cpu = baseline_model.cpu()
-        baseline_quantized = torch.quantization.quantize_dynamic(
-            baseline_model_cpu,
-            {torch.nn.Linear, torch.nn.Conv2d},
-            dtype=torch.qint8
-        )
+    # SNIP
+    print("\nBaseline 3: SNIP")
+    model = copy.deepcopy(base_model)
+    snip_pruner = SNIPPruning(model, train_loader, val_loader, device)
+    model = snip_pruner.prune(target_sparsity / 100.0)
+    sparsity = calculate_sparsity(model)
+    fp32_acc = evaluate_model(model, val_loader, device)
+    model_int8 = apply_ptq(copy.deepcopy(model).cpu(), val_loader, 'cpu')
+    int8_acc = evaluate_model(model_int8, val_loader, 'cpu')
+    print(f"  Sparsity: {sparsity:.2f}% | FP32: {fp32_acc:.2f}% | INT8: {int8_acc:.2f}%")
+    baseline_results.append({'name': 'SNIP', 'sparsity': sparsity, 'fp32': fp32_acc, 'int8': int8_acc})
 
-        int8_acc = evaluate_model(baseline_quantized, val_loader, 'cpu')
-        total_drop = baseline_accuracy - int8_acc
+    # GraSP
+    print("\nBaseline 4: GraSP")
+    model = copy.deepcopy(base_model)
+    grasp_pruner = GraSPPruning(model, train_loader, val_loader, device)
+    model = grasp_pruner.prune(target_sparsity / 100.0)
+    sparsity = calculate_sparsity(model)
+    fp32_acc = evaluate_model(model, val_loader, device)
+    model_int8 = apply_ptq(copy.deepcopy(model).cpu(), val_loader, 'cpu')
+    int8_acc = evaluate_model(model_int8, val_loader, 'cpu')
+    print(f"  Sparsity: {sparsity:.2f}% | FP32: {fp32_acc:.2f}% | INT8: {int8_acc:.2f}%")
+    baseline_results.append({'name': 'GraSP', 'sparsity': sparsity, 'fp32': fp32_acc, 'int8': int8_acc})
 
-        print(f"  {baseline_name} INT8 accuracy: {int8_acc:.2f}%")
-        print(f"  {baseline_name} total drop: {total_drop:.2f}%")
-
-        baseline_results[baseline_name] = {
-            'sparsity': actual_spar,
-            'flops': flops,
-            'flops_str': flops_str,
-            'fp32_accuracy': fp32_acc,
-            'int8_accuracy': int8_acc,
-            'total_drop': total_drop
-        }
-
-    # ========================================================================
-    # PART 3: Statistical Analysis of Multi-Strategies
-    # ========================================================================
+    # Final summary
     print("\n" + "=" * 80)
-    print("MULTI-STRATEGY STATISTICS (10 variants)")
+    print("FINAL RESULTS SUMMARY")
     print("=" * 80)
 
-    int8_accuracies = [r['int8_accuracy'] for r in multi_strategy_results]
-    total_drops = [r['total_drop'] for r in multi_strategy_results]
-    sparsities = [r['actual_sparsity'] for r in multi_strategy_results]
+    print("\nMulti-Strategy Results:")
+    print(f"{'Strategy':<30} | {'Sparsity':<10} | {'FT Acc':<10} | {'INT8 Acc':<10} | {'Drop':<10}")
+    print("-" * 80)
+    for res in results:
+        print(f"{res['strategy']:<30} | {res['sparsity']:<10.2f} | {res['ft_acc']:<10.2f} | {res['int8_acc']:<10.2f} | {res['drop']:<10.2f}")
 
-    mean_int8_acc = np.mean(int8_accuracies)
-    std_int8_acc = np.std(int8_accuracies)
-    mean_drop = np.mean(total_drops)
-    std_drop = np.std(total_drops)
-    mean_sparsity_final = np.mean(sparsities)
+    print("\nMulti-Strategy Statistics:")
+    int8_accs = [r['int8_acc'] for r in results]
+    drops = [r['drop'] for r in results]
+    print(f"  Mean INT8 Accuracy: {np.mean(int8_accs):.2f}% ± {np.std(int8_accs):.2f}%")
+    print(f"  Mean Accuracy Drop: {np.mean(drops):.2f}% ± {np.std(drops):.2f}%")
+    print(f"  Best INT8 Accuracy: {np.max(int8_accs):.2f}%")
+    print(f"  Worst INT8 Accuracy: {np.min(int8_accs):.2f}%")
 
-    best_strategy = max(multi_strategy_results, key=lambda x: x['int8_accuracy'])
-    worst_strategy = min(multi_strategy_results, key=lambda x: x['int8_accuracy'])
-
-    print(f"  Mean INT8 Accuracy: {mean_int8_acc:.2f}% ± {std_int8_acc:.2f}%")
-    print(f"  Mean Accuracy Drop: {mean_drop:.2f}% ± {std_drop:.2f}%")
-    print(f"  Mean Sparsity: {mean_sparsity_final:.2f}%")
-    print(f"  Best INT8 Accuracy: {best_strategy['int8_accuracy']:.2f}% ({best_strategy['type']})")
-    print(f"  Worst INT8 Accuracy: {worst_strategy['int8_accuracy']:.2f}% ({worst_strategy['type']})")
-
-    # ========================================================================
-    # PART 4: Final Comparison Table
-    # ========================================================================
-    print("\n" + "=" * 80)
-    print("COMPARISON: Multi-Strategy vs Baselines (with PTQ)")
-    print("=" * 80)
-
-    print(f"\n{'Method':<20} {'Sparsity':<12} {'FLOPs':<12} {'FP32 Acc':<12} {'INT8 Acc':<12} {'Total Drop':<12}")
-    print("-" * 100)
-
-    # Multi-Strategy (best)
-    print(f"{'Multi-Strategy (Best)':<20} {best_strategy['actual_sparsity']:>10.2f}% {best_strategy['flops_str']:>10} {best_strategy['fp32_accuracy']:>10.2f}% {best_strategy['int8_accuracy']:>10.2f}% {best_strategy['total_drop']:>10.2f}%")
-
-    # Baselines
-    for baseline_name in ["MAG", "SNIP", "GraSP", "Random"]:
-        res = baseline_results[baseline_name]
-        method_name = f"{baseline_name}+PTQ"
-        print(f"{method_name:<20} {res['sparsity']:>10.2f}% {res['flops_str']:>10} {res['fp32_accuracy']:>10.2f}% {res['int8_accuracy']:>10.2f}% {res['total_drop']:>10.2f}%")
-
-    # ========================================================================
-    # PART 5: Detailed Multi-Strategy Results
-    # ========================================================================
-    print("\n" + "=" * 80)
-    print("DETAILED MULTI-STRATEGY RESULTS")
-    print("=" * 80)
-
-    print(f"\n{'ID':<4} {'Type':<25} {'Sparsity':<10} {'FLOPs':<12} {'FP32 Acc':<10} {'INT8 Acc':<10} {'Total Drop':<10}")
-    print("-" * 100)
-
-    for r in multi_strategy_results:
-        print(f"{r['strategy_id']:<4} {r['type']:<25} {r['actual_sparsity']:>8.2f}% {r['flops_str']:>10} {r['fp32_accuracy']:>8.2f}% {r['int8_accuracy']:>8.2f}% {r['total_drop']:>8.2f}%")
-
-    # ========================================================================
-    # SUMMARY
-    # ========================================================================
-    print("\n" + "=" * 80)
-    print("KEY FINDINGS")
-    print("=" * 80)
-
-    # Calculate improvements
-    best_multi_int8 = best_strategy['int8_accuracy']
-    mag_int8 = baseline_results['MAG']['int8_accuracy']
-    snip_int8 = baseline_results['SNIP']['int8_accuracy']
-    grasp_int8 = baseline_results['GraSP']['int8_accuracy']
-    random_int8 = baseline_results['Random']['int8_accuracy']
-
-    print(f"\n1. Multi-Strategy Performance:")
-    print(f"   - Mean INT8 Accuracy: {mean_int8_acc:.2f}% ± {std_int8_acc:.2f}%")
-    print(f"   - Best INT8 Accuracy: {best_multi_int8:.2f}% ({best_strategy['type']})")
-    print(f"   - Mean Sparsity: {mean_sparsity_final:.2f}%")
-
-    print(f"\n2. Baseline Comparisons (at {mean_sparsity:.2f}% sparsity):")
-    print(f"   - Best Multi-Strategy vs MAG: {best_multi_int8 - mag_int8:+.2f}%")
-    print(f"   - Best Multi-Strategy vs SNIP: {best_multi_int8 - snip_int8:+.2f}%")
-    print(f"   - Best Multi-Strategy vs GraSP: {best_multi_int8 - grasp_int8:+.2f}%")
-    print(f"   - Best Multi-Strategy vs Random: {best_multi_int8 - random_int8:+.2f}%")
-
-    print(f"\n3. Multi-Strategy Robustness:")
-    print(f"   - All 10 variants tested with different sampling strategies")
-    print(f"   - Standard deviation: {std_int8_acc:.2f}% (shows consistency)")
-    print(f"   - Range: {worst_strategy['int8_accuracy']:.2f}% - {best_strategy['int8_accuracy']:.2f}%")
-
-    print(f"\n4. Compression:")
-    print(f"   - Sparsity: ~{mean_sparsity_final:.1f}%")
-    print(f"   - Quantization: FP32 -> INT8")
-    print(f"   - Combined compression for efficient deployment")
+    print("\nBaseline Results:")
+    print(f"{'Method':<15} | {'Sparsity':<10} | {'FP32 Acc':<10} | {'INT8 Acc':<10}")
+    print("-" * 60)
+    for res in baseline_results:
+        print(f"{res['name']:<15} | {res['sparsity']:<10.2f} | {res['fp32']:<10.2f} | {res['int8']:<10.2f}")
 
     print("\n" + "=" * 80)
-    print("CONCLUSION")
-    print("=" * 80)
-    print("""
-The multi-strategy approach demonstrates that MAG/SNIP-derived ranges enable
-a FAMILY of robust pruning solutions. All 10 strategies maintain competitive
-performance while exploring different layer distributions (classifier-heavy,
-balanced, conv-heavy) and sampling methods (min, max, percentiles).
-
-This systematic exploration shows the ranges are not only effective but also
-provide flexibility for different deployment constraints and requirements.
-""")
-
-    print("=" * 80)
-
 
 if __name__ == "__main__":
     main()
