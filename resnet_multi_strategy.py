@@ -24,6 +24,7 @@ import random
 import sys
 from typing import List, Dict, Tuple
 import csv
+import json
 from thop import profile, clever_format
 
 # Add path for benchmarking imports
@@ -563,6 +564,8 @@ def parse_args():
                         help=f'Fine-tuning epochs (default: {DEFAULT_FINE_TUNE_EPOCHS})')
     parser.add_argument('--device', type=str, default='cuda',
                         help='Device to use: cuda or cpu (default: cuda if available)')
+    parser.add_argument('--output_dir', type=str, default='pruned_models/resnet',
+                        help='Directory to save pruned models (default: pruned_models/resnet)')
     return parser.parse_args()
 
 def main():
@@ -581,6 +584,11 @@ def main():
     else:
         device = torch.device("cpu")
     print(f"Device: {device}")
+
+    # Setup output directory and savepoint
+    os.makedirs(args.output_dir, exist_ok=True)
+    savepoint_file = os.path.join(args.output_dir, 'savepoint.json')
+    savepoint = json.load(open(savepoint_file)) if os.path.exists(savepoint_file) else {'completed': []}
 
     # Load data
     print("\nLoading GTSRB dataset...")
@@ -637,9 +645,27 @@ def main():
     multi_strategy_results = []
 
     for strategy_id, (strategy_type, target_sparsity) in enumerate(strategy_types, 1):
+        sp_key = f"strategy_{strategy_id}_{strategy_type}"
         print(f"\n{'='*80}")
         print(f"Strategy {strategy_id}/10: {strategy_type} (target: {target_sparsity:.1f}%)")
         print(f"{'='*80}")
+
+        # Skip if already completed (savepoint resume)
+        if sp_key in savepoint['completed']:
+            print(f"  [SKIP] Already completed — loading saved result from {args.output_dir}")
+            fp32_path = os.path.join(args.output_dir, f'{sp_key}_fp32.pth')
+            if os.path.exists(fp32_path):
+                ckpt = torch.load(fp32_path, map_location='cpu')
+                multi_strategy_results.append({
+                    'strategy_id': strategy_id, 'type': strategy_type,
+                    'target_sparsity': target_sparsity,
+                    'actual_sparsity': ckpt['actual_sparsity'],
+                    'flops': ckpt.get('flops', 0), 'flops_str': ckpt.get('flops_str', 'N/A'),
+                    'fp32_accuracy': ckpt['fp32_accuracy'], 'int8_accuracy': ckpt['int8_accuracy'],
+                    'total_drop': baseline_accuracy - ckpt['int8_accuracy'],
+                    'quantization_drop': ckpt['fp32_accuracy'] - ckpt['int8_accuracy']
+                })
+            continue
 
         # Analyze sensitivity for first strategy only (to avoid repetition)
         if strategy_id == 1:
@@ -683,6 +709,22 @@ def main():
         quantization_drop = final_fp32_accuracy - int8_accuracy
         print(f"  INT8 Accuracy: {int8_accuracy:.2f}%")
         print(f"  Total accuracy drop: {total_drop:.2f}%")
+
+        # --- SAVE MODELS ---
+        fp32_path = os.path.join(args.output_dir, f'{sp_key}_fp32.pth')
+        int8_path = os.path.join(args.output_dir, f'{sp_key}_int8.pth')
+        torch.save({
+            'strategy_type': strategy_type, 'target_sparsity': target_sparsity,
+            'actual_sparsity': actual_sparsity, 'flops': flops, 'flops_str': flops_str,
+            'fp32_accuracy': final_fp32_accuracy, 'int8_accuracy': int8_accuracy,
+            'state_dict': pruned_model.state_dict(), 'masks': masks
+        }, fp32_path)
+        torch.save(quantized_model, int8_path)
+        print(f"  Saved FP32 → {fp32_path}")
+        print(f"  Saved INT8 → {int8_path}")
+        savepoint['completed'].append(sp_key)
+        with open(savepoint_file, 'w') as f:
+            json.dump(savepoint, f, indent=2)
 
         # Store results
         multi_strategy_results.append({

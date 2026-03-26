@@ -20,6 +20,7 @@ from timm import create_model
 import numpy as np
 import copy
 import csv
+import json
 import os
 from typing import List, Dict, Tuple
 import random
@@ -68,6 +69,8 @@ def parse_args():
                         help=f'Fine-tuning epochs (default: {DEFAULT_FINE_TUNE_EPOCHS})')
     parser.add_argument('--device', type=str, default='cuda',
                         help='Device to use: cuda or cpu (default: cuda if available)')
+    parser.add_argument('--output_dir', type=str, default='pruned_models/levit',
+                        help='Directory to save pruned models (default: pruned_models/levit)')
     return parser.parse_args()
 
 def load_data():
@@ -342,6 +345,11 @@ def main():
         device = torch.device("cpu")
     print(f"Device: {device}")
 
+    # Setup output directory and savepoint
+    os.makedirs(args.output_dir, exist_ok=True)
+    savepoint_file = os.path.join(args.output_dir, 'savepoint.json')
+    savepoint = json.load(open(savepoint_file)) if os.path.exists(savepoint_file) else {'completed': []}
+
     # Load data
     train_loader, val_loader = load_data()
 
@@ -396,24 +404,50 @@ def main():
     
     results = []
     
-    for strategy_type in strategy_types:
+    for idx, strategy_type in enumerate(strategy_types, 1):
+        strategy_id = f"strategy_{idx}_{strategy_type}"
         print(f"\nEvaluating Strategy: {strategy_type}")
-        
+
+        # Skip if already completed (savepoint resume)
+        if strategy_id in savepoint['completed']:
+            print(f"  [SKIP] Already completed — loading saved result from {args.output_dir}")
+            fp32_path = os.path.join(args.output_dir, f'{strategy_id}_fp32.pth')
+            if os.path.exists(fp32_path):
+                ckpt = torch.load(fp32_path, map_location='cpu')
+                results.append({'strategy': ckpt['strategy_type'], 'sparsity': ckpt['sparsity'],
+                                 'ft_acc': ckpt['fp32_accuracy'], 'int8_acc': ckpt['int8_accuracy']})
+            continue
+
         strategy, desc = create_strategy_variant(layer_names, layer_params, layer_ranges, strategy_type)
-        
+
         model = copy.deepcopy(base_model)
         masks = apply_pruning_mask(model, strategy, layer_names, layer_params, args.score_dir)
-        
+
         sparsity = calculate_sparsity(model)
         print(f"  Sparsity: {sparsity:.2f}%")
-        
+
         ft_acc = fine_tune_model(model, masks, train_loader, val_loader, device, epochs=args.epochs)
         print(f"  Fine-tuned Accuracy: {ft_acc:.2f}%")
-        
+
         model_int8 = apply_ptq(copy.deepcopy(model).cpu(), val_loader, 'cpu')
         int8_acc = evaluate_model(model_int8, val_loader, 'cpu')
         print(f"  INT8 Accuracy: {int8_acc:.2f}%")
-        
+
+        # --- SAVE MODELS ---
+        fp32_path = os.path.join(args.output_dir, f'{strategy_id}_fp32.pth')
+        int8_path = os.path.join(args.output_dir, f'{strategy_id}_int8.pth')
+        torch.save({
+            'strategy': desc, 'strategy_type': strategy_type, 'sparsity': sparsity,
+            'fp32_accuracy': ft_acc, 'int8_accuracy': int8_acc,
+            'state_dict': model.state_dict(), 'masks': masks
+        }, fp32_path)
+        torch.save(model_int8, int8_path)
+        print(f"  Saved FP32 → {fp32_path}")
+        print(f"  Saved INT8 → {int8_path}")
+        savepoint['completed'].append(strategy_id)
+        with open(savepoint_file, 'w') as f:
+            json.dump(savepoint, f, indent=2)
+
         results.append({
             'strategy': strategy_type,
             'sparsity': sparsity,
