@@ -203,7 +203,8 @@ python VGG_multi_Strategy.py \
     --score_dir ./vgg_scores \
     --data_path ./data \
     --batch_size 128 \
-    --device cuda
+    --device cuda \
+    --output_dir pruned_models/vgg
 ```
 
 **Arguments:**
@@ -212,6 +213,17 @@ python VGG_multi_Strategy.py \
 - `--data_path` (optional): Path to CIFAR-10 data (default: `./data`)
 - `--batch_size` (optional): Batch size for training/evaluation (default: 128)
 - `--device` (optional): Device to use - `cuda` or `cpu` (default: `cuda`)
+- `--output_dir` (optional): Directory to save pruned models (default: `pruned_models/vgg`)
+
+**Saved files** (one pair per strategy):
+```
+pruned_models/vgg/
+├── strategy_1_max_aggressive_fp32.pth   # FP32 weights + masks + metrics
+├── strategy_1_max_aggressive_int8.pth   # INT8 quantized model object
+├── strategy_2_min_conservative_fp32.pth
+├── ...
+└── savepoint.json                       # Resume tracker (re-run safe)
+```
 
 **Expected output:**
 ```
@@ -264,7 +276,8 @@ python resnet_multi_strategy.py \
     --data_path /path/to/GTSRB \
     --batch_size 64 \
     --epochs 30 \
-    --device cuda
+    --device cuda \
+    --output_dir pruned_models/resnet
 ```
 
 **Arguments:**
@@ -274,6 +287,16 @@ python resnet_multi_strategy.py \
 - `--batch_size` (optional): Batch size (default: 64)
 - `--epochs` (optional): Fine-tuning epochs (default: 30)
 - `--device` (optional): `cuda` or `cpu` (default: `cuda`)
+- `--output_dir` (optional): Directory to save pruned models (default: `pruned_models/resnet`)
+
+**Saved files** (one pair per strategy):
+```
+pruned_models/resnet/
+├── strategy_1_max_aggressive_fp32.pth
+├── strategy_1_max_aggressive_int8.pth
+├── ...
+└── savepoint.json
+```
 
 ---
 
@@ -297,7 +320,8 @@ python levit_multi_strategy.py \
     --data_path ./data \
     --batch_size 32 \
     --epochs 30 \
-    --device cuda
+    --device cuda \
+    --output_dir pruned_models/levit
 ```
 
 **Arguments:**
@@ -307,6 +331,16 @@ python levit_multi_strategy.py \
 - `--batch_size` (optional): Batch size (default: 32)
 - `--epochs` (optional): Fine-tuning epochs (default: 30)
 - `--device` (optional): `cuda` or `cpu` (default: `cuda`)
+- `--output_dir` (optional): Directory to save pruned models (default: `pruned_models/levit`)
+
+**Saved files** (one pair per strategy):
+```
+pruned_models/levit/
+├── strategy_1_max_aggressive_fp32.pth
+├── strategy_1_max_aggressive_int8.pth
+├── ...
+└── savepoint.json
+```
 
 ---
 
@@ -330,7 +364,8 @@ python swin_multi_strategy.py \
     --data_path ./data \
     --batch_size 32 \
     --epochs 30 \
-    --device cuda
+    --device cuda \
+    --output_dir pruned_models/swin
 ```
 
 **Arguments:**
@@ -340,6 +375,16 @@ python swin_multi_strategy.py \
 - `--batch_size` (optional): Batch size (default: 32)
 - `--epochs` (optional): Fine-tuning epochs (default: 30)
 - `--device` (optional): `cuda` or `cpu` (default: `cuda`)
+- `--output_dir` (optional): Directory to save pruned models (default: `pruned_models/swin`)
+
+**Saved files** (one pair per strategy):
+```
+pruned_models/swin/
+├── strategy_1_max_aggressive_fp32.pth
+├── strategy_1_max_aggressive_int8.pth
+├── ...
+└── savepoint.json
+```
 
 ---
 
